@@ -2,8 +2,9 @@ import tensorflow as tf
 from tensorflow.keras.callbacks import Callback, ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 import os
 from datetime import datetime
-from ..config.config import Config
-from ..visualization.results_visualizer import ResultsVisualizer
+from src.config.config import Config
+from src.visualization.results_visualizer import ResultsVisualizer
+import pickle
 
 class TrainingHistory(Callback):
     """Custom callback to track and save training history."""

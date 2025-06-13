@@ -1,16 +1,187 @@
 import tensorflow as tf
+from tensorflow import keras
 from tensorflow.keras import layers, models
-from tensorflow.keras.applications import ResNet50, MobileNetV2
-from ..config.model_configs import ModelConfigs
+from tensorflow.keras.applications import ResNet50, MobileNetV2, EfficientNetB0
+from src.config.model_configs import ModelConfigs
+from src.models.base_model import BaseDetectionModel
 
-class DetectionModel:
-    def __init__(self, model_name='resnet50', pretrained=True):
+class SimpleDetectionModel(BaseDetectionModel):
+    """Simple CNN-based detection model without pretrained backbone"""
+
+    def __init__(
+        self,
+        num_classes: int,
+        config: ModelConfigs = None,
+        **kwargs,
+    ):
+        super().__init__(num_classes, **kwargs)
+        self.config = config
+        self.backbone = self._build_backbone()
+        self.head = self._build_detection_head()
+        self.classification_head = self._build_classification_head()
+        
+
+    def _build_backbone(self):  
+        """Build the backbone of the model."""
+        backbone = keras.Sequential([
+            # Block 1
+            layers.Conv2D(32, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.Conv2D(32, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D(2),
+            
+            # Block 2
+            layers.Conv2D(64, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.Conv2D(64, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D(2),
+            
+            # Block 3
+            layers.Conv2D(128, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.Conv2D(128, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D(2),
+            
+            # Block 4
+            layers.Conv2D(256, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.Conv2D(256, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D(2),
+            
+            # Block 5
+            layers.Conv2D(512, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+            layers.Conv2D(512, 3, padding='same', activation='relu'),
+            layers.BatchNormalization(),
+        ])
+        
+        return backbone
+    
+
+    def _build_detection_head(self):
+        """Build the detection head of the model."""
+        detection_head = keras.Sequential([
+            layers.GlobalAveragePooling2D(),
+            layers.Dense(512, activation='relu'),
+            layers.Dropout(0.5),
+            layers.Dense(256, activation='relu'),
+            layers.Dropout(0.5),
+            layers.Dense(4, name='bbox_output')  # x_min, y_min, x_max, y_max
+        ])
+        
+        return detection_head
+    
+    def _build_classification_head(self):
+        """Build the classification head of the model."""
+        classification_head = keras.Sequential([
+            layers.GlobalAveragePooling2D(),
+            layers.Dense(512, activation='relu'),
+            layers.Dropout(0.5),
+            layers.Dense(256, activation='relu'),
+            layers.Dropout(0.5),
+            layers.Dense(self.num_classes, activation='softmax', name='class_output')
+        ])
+        
+        return classification_head
+
+
+class PretrainedDetectionModel(BaseDetectionModel):
+    def __init__(
+        self,
+        num_classes: int,
+        backbone_name: str = 'resnet50',
+        config: ModelConfigs = None,
+        pretrained: bool = True,
+        **kwargs,
+    ):
         """Initialize detection model with specified backbone."""
-        self.config = ModelConfigs()
-        self.model_name = model_name
-        self.pretrained = pretrained
-        self.model = self._build_model()
+        super().__init__(num_classes, **kwargs)
+        self.config = config
+        self.backbone_name = backbone_name
 
+        self.pretrained = pretrained
+
+        self.backbone = self._build_backbone()
+        self.head = self._build_detection_head()
+        self.classification_head = self._build_classification_head()
+
+    def _build_backbone(self):
+        """Build the backbone of the model."""
+        params_model = self.config.DETECTION_MODELS[self.backbone_name.lower()]
+        input_shape = params_model['input_shape']
+        pretrained_weights = params_model['pretrained_weights']
+        freeze_backbone = params_model['freeze_backbone']
+        detection_head_units = params_model['detection_head_units']
+        bbox_output_units = params_model['bbox_output_units']
+        class_output_units = params_model['class_output_units']
+        
+        if self.backbone_name.lower() == 'resnet50':
+            backbone = ResNet50(
+                include_top=False,
+                weights=pretrained_weights,
+                input_shape=input_shape,
+            )
+        elif self.backbone_name.lower() == 'mobilenetv2':
+            backbone = MobileNetV2(
+                include_top=False,
+                weights=pretrained_weights,
+                input_shape=input_shape,
+            )
+        elif self.backbone_name.lower() == 'efficientnetb0':
+            backbone = EfficientNetB0(
+                include_top=False,
+                weights=pretrained_weights,
+                input_shape=input_shape,
+            )
+        else:
+            raise ValueError(f"Unsupported backbone: {self.backbone_name}")
+        
+        if freeze_backbone:
+            for layer in backbone.layers:
+                layer.trainable = False
+
+        return backbone 
+    
+    def _build_detection_head(self):
+        """Build the detection head of the model."""
+        params_model = self.config.DETECTION_MODELS[self.backbone_name.lower()]
+        detection_head_units = params_model['detection_head_units']
+        bbox_output_units = params_model['bbox_output_units']
+
+        # Predict Sequence
+        predict_sequence = [
+            layers.Conv2D(512, (3, 3), padding='same'),
+            layers.BatchNormalization(),
+            layers.ReLU(),
+        ]
+
+        detection_head = keras.Sequential([
+            layers.Conv2D(512, (3, 3), padding='same'),
+            layers.BatchNormalization(),
+            layers.ReLU(),
+
+            # Bounding box prediction
+            *[
+                (
+                    layers.Conv2D(units, (3, 3), padding='same'),
+                    layers.BatchNormalization(),
+                    layers.ReLU(),
+                )
+                for units in detection_head_units
+            ],
+            # Classification prediction
+            layers.GlobalAveragePooling2D(),
+            layers.Dense(bbox_output_units, name='bbox_output'),
+
+            # Classification prediction
+        ])
+        
+        return detection_head
+    
     def _build_detection_head(self, x, num_classes):
         """Build detection head for bounding box and classification."""
         # Shared features
@@ -76,23 +247,3 @@ class DetectionModel:
         )
         
         return model
-
-    def compile(self, learning_rate=1e-4):
-        """Compile the model with appropriate loss functions."""
-        bbox_loss = tf.keras.losses.MeanSquaredError()
-        class_loss = tf.keras.losses.SparseCategoricalCrossentropy()
-        
-        self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-            loss={
-                'bbox_output': bbox_loss,
-                'class_output': class_loss
-            },
-            metrics={
-                'class_output': ['accuracy']
-            }
-        )
-
-    def get_model(self):
-        """Return the built model."""
-        return self.model

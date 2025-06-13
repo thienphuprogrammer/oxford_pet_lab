@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from tensorflow.keras.applications import ResNet50, MobileNetV2
-from ..config.model_configs import ModelConfigs
+from src.config.model_configs import ModelConfigs
 
 class SegmentationModel:
     def __init__(self, model_name='unet_resnet50', pretrained=True):

@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from tensorflow.keras.applications import ResNet50
-from ..config.model_configs import ModelConfigs
+from src.config.model_configs import ModelConfigs
 
 class MultiTaskModel:
     def __init__(self, pretrained=True):

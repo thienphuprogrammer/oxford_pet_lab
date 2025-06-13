@@ -1,11 +1,11 @@
 import tensorflow as tf
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from ..config.config import Config
-from ..models.detection_model import DetectionModel
-from ..models.segmentation_model import SegmentationModel
-from ..models.multitask_model import MultiTaskModel
-from ..data.dataset_loader import OxfordPetDatasetLoader
-from ..data.preprocessor import DataPreprocessor
+from src.config.config import Config
+from src.models.detection_model import DetectionModel
+from src.models.segmentation_model import SegmentationModel
+from src.models.multitask_model import MultiTaskModel
+from src.data.dataset_loader import OxfordPetDatasetLoader
+from src.data.preprocessing import DataPreprocessor
 from .callbacks import get_callbacks
 from .metrics import DetectionMetrics, SegmentationMetrics, MultiTaskMetrics
 
@@ -23,6 +23,10 @@ class Trainer:
         
         # Initialize model
         self.model = self._initialize_model()
+
+         # Initialize model
+        self.model_wrapper = self._initialize_model()
+        self.model = self.model_wrapper.get_model()
         
         # Initialize metrics
         self.metrics = {
@@ -42,7 +46,7 @@ class Trainer:
         else:
             raise ValueError(f"Unknown model type: {self.model_type}")
         
-    def prepare_data(self):
+    def prepare_data(self, task=None):
         """Prepare and preprocess the dataset."""
         # Load dataset
         train_ds, val_ds, test_ds = self.data_loader.load_dataset()
@@ -51,7 +55,8 @@ class Trainer:
         train_ds = self.preprocessor.prepare_dataset(
             train_ds,
             batch_size=self.config.BATCH_SIZE,
-            shuffle=True
+            shuffle=True,
+            task=task or self.model_type
         )
         
         val_ds = self.preprocessor.prepare_dataset(

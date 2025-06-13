@@ -2,24 +2,25 @@
 import tensorflow as tf
 import numpy as np
 from typing import Dict, Any, Tuple
-from config.config import Config
+from src.config.config import Config
 
 class DataPreprocessor:
     """Data preprocessing utilities for Oxford Pet dataset."""
     
-    def __init__(self, config: Config = None):
+    def __init__(self, config: Config = None, suffer_buffer: int = 1000):
         self.config = config or Config()
+        self.suffer_buffer = suffer_buffer
     
     def normalize_image(self, image: tf.Tensor) -> tf.Tensor:
         """Normalize image to [0, 1] range."""
-        return tf.cast(image, tf.float32) / 255.0
+        return tf.image.convert_image_dtype(image, dtype=tf.float32, saturate=True)
     
     def resize_image(self, image: tf.Tensor, size: Tuple[int, int] = None) -> tf.Tensor:
         """Resize image to target size."""
         size = size or self.config.IMG_SIZE
-        return tf.image.resize(image, size)
+        return tf.image.resize(image, size, antialias=True)
     
-    def process_bbox(self, bbox: tf.Tensor, image_shape: tf.Tensor) -> tf.Tensor:
+    def process_bbox(self, bbox: tf.Tensor) -> tf.Tensor:
         """
         Process bounding box coordinates.
         Oxford Pet dataset provides normalized coordinates [ymin, xmin, ymax, xmax].
@@ -27,18 +28,7 @@ class DataPreprocessor:
         """
         # bbox format in dataset: [ymin, xmin, ymax, xmax] (normalized)
         ymin, xmin, ymax, xmax = tf.unstack(bbox)
-        
-        # Convert to [xmin, ymin, xmax, ymax] format
-        bbox_reordered = tf.stack([xmin, ymin, xmax, ymax])
-        
-        # Denormalize coordinates
-        height = tf.cast(image_shape[0], tf.float32)
-        width = tf.cast(image_shape[1], tf.float32)
-        
-        scale = tf.stack([width, height, width, height])
-        bbox_denorm = bbox_reordered * scale
-        
-        return bbox_denorm
+        return tf.stack([xmin, ymin, xmax, ymax])
     
     def process_segmentation_mask(self, mask: tf.Tensor) -> tf.Tensor:
         """
@@ -71,7 +61,8 @@ class DataPreprocessor:
             Preprocessed sample dictionary
         """
         # Get original image shape for bbox processing
-        original_shape = tf.shape(sample['image'])
+        orig_h = tf.cast(tf.shape(sample['image'])[0], tf.float32)
+        orig_w = tf.cast(tf.shape(sample['image'])[1], tf.float32)
         
         # Process image
         image = self.resize_image(sample['image'])
@@ -81,12 +72,9 @@ class DataPreprocessor:
         label = sample['label']
         
         # Process bounding box
-        bbox = self.process_bbox(sample['bbox'], original_shape)
+        bbox_normalized = self.process_bbox(sample['bbox'])
         # Normalize bbox to [0, 1] range for the resized image
-        bbox_normalized = bbox / tf.cast(tf.stack([
-            self.config.IMG_WIDTH, self.config.IMG_HEIGHT,
-            self.config.IMG_WIDTH, self.config.IMG_HEIGHT
-        ]), tf.float32)
+        bbox_denormalized = bbox_normalized * tf.stack([orig_w, orig_h, orig_w, orig_h])
         
         # Process segmentation mask
         seg_mask = self.process_segmentation_mask(sample['segmentation_mask'])
@@ -96,7 +84,7 @@ class DataPreprocessor:
             'label': label,
             'bbox': bbox_normalized,
             'segmentation_mask': seg_mask,
-            'original_bbox': bbox,  # Keep original for visualization
+            'original_bbox': bbox_denormalized,  # Keep original for visualization
         }
     
     def create_detection_target(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
@@ -123,3 +111,38 @@ class DataPreprocessor:
             'segmentation_mask': processed_sample['segmentation_mask'],
         }
         return image, targets
+
+    def _format_for_task(self, processed_sample: Dict[str, tf.Tensor], task: str):
+        """Return (x, y) depending on the chosen task."""
+        if task == "detection":
+            return self.create_detection_target(processed_sample)
+        if task == "segmentation":
+            return self.create_segmentation_target(processed_sample)
+        # Default → multitask
+        return self.create_multitask_target(processed_sample)
+    
+    def prepare_dataset(
+        self,
+        ds: tf.data.Dataset,
+        batch_size: int,
+        shuffle: bool = False,
+        task: str = "multitask",
+    ) -> tf.data.Dataset:
+        """
+        Convert raw TFDS split into batched, pre-processed dataset
+        ready for model.{fit,evaluate,predict}.
+        """
+        if shuffle:
+            ds = ds.shuffle(self.suffer_buffer, seed=self.config.RANDOM_SEED)
+
+        ds = ds.map(
+            lambda s: self._format_for_task(self.preprocess_sample(s), task),
+            num_parallel_calls=tf.data.AUTOTUNE,
+            deterministic=False,
+        )
+
+        return (
+            ds.batch(batch_size, drop_remainder=True)
+            .cache()
+            .prefetch(tf.data.AUTOTUNE)
+        )

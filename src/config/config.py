@@ -63,101 +63,35 @@ class Config:
     FIGURE_SIZE = (12, 8)
     DPI = 100
 
-# config/model_configs.py
-class ModelConfigs:
-    """Model-specific configurations."""
+
+    @classmethod
+    def setup_gpu(cls):
+        """Setup GPU configuration"""
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        if gpus:
+            try:
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, cls.GPU_MEMORY_GROWTH)
+                if cls.MIXED_PRECISION:
+                    tf.keras.mixed_precision.set_global_policy('mixed_float16')
+            except RuntimeError as e:
+                print(f"GPU setup error: {e}")
     
-    # Detection model configurations
-    DETECTION_MODELS = {
-        "resnet50": {
-            "backbone": "ResNet50",
-            "input_shape": (224, 224, 3),
-            "pretrained_weights": "imagenet",
-            "freeze_backbone": False,
-            "detection_head_units": [256, 128, 64],
-            "bbox_output_units": 4,  # x1, y1, x2, y2
-            "class_output_units": 37,
-        },
-        "mobilenetv2": {
-            "backbone": "MobileNetV2",
-            "input_shape": (224, 224, 3),
-            "pretrained_weights": "imagenet",
-            "freeze_backbone": False,
-            "detection_head_units": [256, 128, 64],
-            "bbox_output_units": 4,
-            "class_output_units": 37,
-        }
-    }
-    
-    # Segmentation model configurations
-    SEGMENTATION_MODELS = {
-        "unet_resnet50": {
-            "backbone": "ResNet50",
-            "input_shape": (224, 224, 3),
-            "pretrained_weights": "imagenet",
-            "freeze_backbone": False,
-            "decoder_filters": [512, 256, 128, 64, 32],
-            "num_classes": 3,  # background, foreground, unknown
-        },
-        "unet_mobilenetv2": {
-            "backbone": "MobileNetV2",
-            "input_shape": (224, 224, 3),
-            "pretrained_weights": "imagenet",
-            "freeze_backbone": False,
-            "decoder_filters": [512, 256, 128, 64, 32],
-            "num_classes": 3,
-        }
-    }
-    
-    # Multitask model configuration
-    MULTITASK_MODEL = {
-        "backbone": "ResNet50",
-        "input_shape": (224, 224, 3),
-        "pretrained_weights": "imagenet",
-        "freeze_backbone": False,
-        "shared_features": 512,
-        "detection_head_units": [256, 128, 64],
-        "segmentation_decoder_filters": [512, 256, 128, 64, 32],
-        "bbox_output_units": 4,
-        "class_output_units": 37,
-        "seg_output_units": 3,
-        "loss_weights": {
-            "detection": 1.0,
-            "segmentation": 1.0,
-            "bbox": 1.0,
-            "classification": 1.0
-        }
-    }
-    
-    # Loss function configurations
-    LOSS_CONFIGS = {
-        "detection": {
-            "bbox_loss": "smooth_l1",
-            "classification_loss": "sparse_categorical_crossentropy",
-            "bbox_loss_weight": 1.0,
-            "classification_loss_weight": 1.0,
-        },
-        "segmentation": {
-            "loss": "sparse_categorical_crossentropy",
-            "metrics": ["accuracy", "iou"],
-        },
-        "multitask": {
-            "detection_weight": 1.0,
-            "segmentation_weight": 1.0,
-        }
-    }
-    
-    # Optimizer configurations
-    OPTIMIZER_CONFIGS = {
-        "adam": {
-            "learning_rate": 1e-4,
-            "beta_1": 0.9,
-            "beta_2": 0.999,
-            "epsilon": 1e-7,
-        },
-        "sgd": {
-            "learning_rate": 1e-3,
-            "momentum": 0.9,
-            "nesterov": True,
-        }
-    }
+    @classmethod
+    def create_directories(cls):
+        """Create necessary directories"""
+        directories = [
+            cls.MODEL_DIR,
+            cls.CHECKPOINT_DIR,
+            cls.LOG_DIR,
+            cls.PLOTS_DIR,
+            "results/predictions",
+            "experiments/detection/with_pretrained",
+            "experiments/detection/without_pretrained",
+            "experiments/segmentation/with_pretrained",
+            "experiments/segmentation/without_pretrained",
+            "experiments/multitask"
+        ]
+        
+        for directory in directories:
+            os.makedirs(directory, exist_ok=True)

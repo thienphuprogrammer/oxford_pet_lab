@@ -4,7 +4,7 @@ import tensorflow_datasets as tfds
 import numpy as np
 from typing import Tuple, Dict, Any
 import logging
-from config.config import Config
+from src.config.config import Config
 
 logging.basicConfig(level=getattr(logging, Config.LOG_LEVEL))
 logger = logging.getLogger(__name__)
