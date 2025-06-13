@@ -1,105 +1,396 @@
 import tensorflow as tf
-from tensorflow.keras import layers, models
-from tensorflow.keras.applications import ResNet50, MobileNetV2
+from tensorflow import keras
+from tensorflow.keras import layers
+from typing import List, Tuple, Optional
 from src.config.model_configs import ModelConfigs
+from src.config.config import Config
 
-class SegmentationModel:
-    def __init__(self, model_name='unet_resnet50', pretrained=True):
-        """Initialize segmentation model with specified backbone."""
-        self.config = ModelConfigs()
-        self.model_name = model_name
-        self.pretrained = pretrained
-        self.model = self._build_model()
+class SegmentationModel(keras.Model):
+    """Base class for semantic segmentation models"""
+    
+    def __init__(self, num_classes: int, **kwargs):
+        super().__init__(**kwargs)
+        self.num_classes = num_classes
+    
+    def call(self, inputs, training=None):
+        raise NotImplementedError("Subclasses must implement call method")
 
-    def _build_unet_decoder(self, encoder_outputs, num_classes):
-        """Build U-Net decoder architecture."""
-        # Get decoder configuration
-        decoder_config = self.config.SEGMENTATION_MODELS[self.model_name]
+class SimpleUNet(SegmentationModel):
+    """Simple U-Net architecture without pretrained backbone"""
+    
+    def __init__(
+        self, 
+        num_classes: int, 
+        config: Config = None, 
+        models_config: ModelConfigs = None, 
+        **kwargs
+    ):
+        super().__init__(num_classes, **kwargs)
+        self.config = config or Config()
+        self.models_config = models_config or ModelConfigs()
         
-        # Get encoder outputs in reverse order
-        encoder_outputs.reverse()
+        # Encoder (downsampling path)
+        self.encoder_blocks = self._build_encoder()
         
-        # Start with the last encoder output
-        x = encoder_outputs[0]
+        # Decoder (upsampling path)  
+        self.decoder_blocks = self._build_decoder()
         
-        # Build decoder blocks
-        for i, filters in enumerate(decoder_config['decoder_filters']):
-            # Skip connections
-            skip = encoder_outputs[i + 1] if i + 1 < len(encoder_outputs) else None
-            
-            # Upsampling
-            x = layers.Conv2DTranspose(filters, (2, 2), strides=(2, 2), padding='same')(x)
-            x = layers.BatchNormalization()(x)
-            x = layers.ReLU()(x)
-            
-            # Concatenate with skip connection
-            if skip is not None:
-                x = layers.concatenate([x, skip])
-            
-            # Convolutional blocks
-            x = layers.Conv2D(filters, (3, 3), padding='same')(x)
-            x = layers.BatchNormalization()(x)
-            x = layers.ReLU()(x)
-            
-            x = layers.Conv2D(filters, (3, 3), padding='same')(x)
-            x = layers.BatchNormalization()(x)
-            x = layers.ReLU()(x)
+        # Final classification layer
+        self.final_conv = layers.Conv2D(
+            num_classes, 
+            1, 
+            activation='softmax' if num_classes > 1 else 'sigmoid',
+            name='segmentation_output'
+        )
         
-        # Final output layer
-        output = layers.Conv2D(num_classes, (1, 1), activation='softmax')(x)
+    def _build_encoder(self):
+        """Build encoder blocks"""
+        params = self.models_config.SEGMENTATION_MODELS[self.model_name.lower()]
+        filters = params['encoder_filters']
+        encoder_blocks = []
+        
+        for i, filter_count in enumerate(filters):
+            block = keras.Sequential([
+                layers.Conv2D(filter_count, 3, padding='same', activation='relu'),
+                layers.BatchNormalization(),
+                layers.Conv2D(filter_count, 3, padding='same', activation='relu'),
+                layers.BatchNormalization(),
+            ])
+            encoder_blocks.append(block)
+            
+        return encoder_blocks
+    
+    def _build_decoder(self):
+        """Build decoder blocks"""
+        params = self.models_config.SEGMENTATION_MODELS[self.model_name.lower()]
+        filters = params['decoder_filters']
+        decoder_blocks = []
+        
+        for i, filter_count in enumerate(filters):
+            block = keras.Sequential([
+                layers.Conv2DTranspose(filter_count, 2, strides=2, padding='same'),
+                layers.Conv2D(filter_count, 3, padding='same', activation='relu'),
+                layers.BatchNormalization(),
+                layers.Conv2D(filter_count, 3, padding='same', activation='relu'),
+                layers.BatchNormalization(),
+            ])
+            decoder_blocks.append(block)
+            
+        return decoder_blocks
+    
+    def call(self, inputs, training=None):
+        """Forward pass with skip connections"""
+        # Encoder path
+        skip_connections = []
+        x = inputs
+        
+        for i, encoder_block in enumerate(self.encoder_blocks):
+            x = encoder_block(x, training=training)
+            
+            if i < len(self.encoder_blocks) - 1:  # Skip the last layer
+                skip_connections.append(x)
+                x = layers.MaxPooling2D(2)(x)
+        
+        # Decoder path
+        skip_connections = skip_connections[::-1]  # Reverse order
+        
+        for i, decoder_block in enumerate(self.decoder_blocks):
+            x = decoder_block(x, training=training)
+            
+            if i < len(skip_connections):
+                # Concatenate with skip connection
+                skip = skip_connections[i]
+                x = layers.Concatenate()([x, skip])
+        
+        # Final output
+        output = self.final_conv(x)
         
         return output
 
-    def _build_model(self):
-        """Build the complete segmentation model."""
-        # Get backbone configuration
-        backbone_config = self.config.SEGMENTATION_MODELS[self.model_name]
+class PretrainedUNet(SegmentationModel):
+    """U-Net with pretrained encoder backbone"""
+    
+    def __init__(
+        self, 
+        num_classes: int, 
+        pretrained: bool = True,
+        backbone_name: str = 'ResNet50', 
+        config: Config = None, 
+        models_config: ModelConfigs = None, 
+        **kwargs
+    ):
+        super().__init__(num_classes, **kwargs)
+        self.config = config or Config()
+        self.models_config = models_config or ModelConfigs()
+        self.backbone_name = backbone_name
+
+        self.pretrained = pretrained
         
-        # Load backbone
-        if 'resnet' in self.model_name:
-            backbone = ResNet50(
-                include_top=False,
-                weights='imagenet' if self.pretrained else None,
-                input_shape=backbone_config['input_shape'],
-            )
-        elif 'mobilenet' in self.model_name:
-            backbone = MobileNetV2(
-                include_top=False,
-                weights='imagenet' if self.pretrained else None,
-                input_shape=backbone_config['input_shape'],
-            )
+        # Pretrained encoder
+        self.encoder = self._build_pretrained_encoder()
         
-        # Freeze backbone if specified
-        if backbone_config['freeze_backbone']:
-            for layer in backbone.layers:
+        # Decoder
+        self.decoder = self._build_decoder()
+        
+        # Final classification layer
+        self.final_conv = layers.Conv2D(
+            num_classes,
+            1,
+            activation='softmax' if num_classes > 1 else 'sigmoid',
+            name='segmentation_output'
+        )
+        
+    def _build_pretrained_encoder(self):
+        """Build pretrained encoder"""
+        params_model = self.models_config.SEGMENTATION_MODELS[self.backbone_name.lower()]
+        input_shape = params_model['input_shape']
+        pretrained_weights = params_model['pretrained_weights'] if self.pretrained else None
+        freeze_backbone = params_model['freeze_backbone']
+
+        if self.backbone_name == 'ResNet50':
+            backbone = keras.applications.ResNet50(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            # Extract features at different scales
+            layer_names = [
+                'conv1_relu',           # 112x112
+                'conv2_block3_out',     # 56x56  
+                'conv3_block4_out',     # 28x28
+                'conv4_block6_out',     # 14x14
+                'conv5_block3_out'      # 7x7
+            ]
+        elif self.backbone_name == 'EfficientNetB0':
+            backbone = keras.applications.EfficientNetB0(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            layer_names = [
+                'block2a_expand_activation',  # 112x112
+                'block3a_expand_activation',  # 56x56
+                'block4a_expand_activation',  # 28x28
+                'block6a_expand_activation',  # 14x14
+                'top_activation'              # 7x7
+            ]
+        else:
+            raise ValueError(f"Unsupported backbone: {self.backbone_name}")
+        
+        # Extract intermediate outputs
+        outputs = [backbone.get_layer(name).output for name in layer_names]
+        encoder = keras.Model(backbone.input, outputs)
+        
+        # Freeze early layers
+        if freeze_backbone:
+            for layer in encoder.layers[:-10]:
                 layer.trainable = False
+            
+        return encoder
+    
+    def _build_decoder(self):
+        """Build decoder with skip connections"""
+        decoder_blocks = []
+        params_model = self.models_config.SEGMENTATION_MODELS[self.backbone_name.lower()]
+        filters = params_model['decoder_filters']
         
-        # Get encoder outputs at different levels
-        encoder_outputs = []
-        for layer in backbone.layers:
-            if 'conv' in layer.name:
-                encoder_outputs.append(layer.output)
+        for filter_count in filters:
+            block = keras.Sequential([
+                layers.Conv2DTranspose(filter_count, 2, strides=2, padding='same'),
+                layers.Conv2D(filter_count, 3, padding='same', activation='relu'),
+                layers.BatchNormalization(),
+                layers.Conv2D(filter_count, 3, padding='same', activation='relu'),
+                layers.BatchNormalization(),
+            ])
+            decoder_blocks.append(block)
+            
+        return decoder_blocks
+    
+    def call(self, inputs, training=None):
+        """Forward pass"""
+        # Encoder - extract multi-scale features
+        encoder_outputs = self.encoder(inputs, training=training)
         
-        # Add U-Net decoder
-        output = self._build_unet_decoder(encoder_outputs, backbone_config['num_classes'])
+        # Start from the deepest features
+        x = encoder_outputs[-1]
         
-        # Create model
-        model = models.Model(
-            inputs=backbone.input,
-            outputs=output,
-            name=f'segmentation_{self.model_name}'
+        # Decoder with skip connections
+        for i, decoder_block in enumerate(self.decoder):
+            x = decoder_block(x, training=training)
+            
+            # Add skip connection if available
+            if i < len(encoder_outputs) - 1:
+                skip_idx = len(encoder_outputs) - 2 - i
+                skip = encoder_outputs[skip_idx]
+                
+                # Resize skip connection to match current resolution
+                target_shape = tf.shape(x)[1:3]
+                skip = tf.image.resize(skip, target_shape)
+                
+                x = layers.Concatenate()([x, skip])
+        
+        # Final output
+        output = self.final_conv(x)
+        
+        return output
+
+class DeepLabV3Plus(SegmentationModel):
+    """DeepLabV3+ implementation"""
+    
+    def __init__(
+        self, 
+        num_classes: int, 
+        pretrained: bool = True,
+        backbone_name: str = 'ResNet50', 
+        config: Config = None, 
+        models_config: ModelConfigs = None,
+        **kwargs
+    ):
+        super().__init__(num_classes, **kwargs)
+        self.config = config or Config()
+        self.models_config = models_config or ModelConfigs()
+        self.backbone_name = backbone_name
+        
+        self.pretrained = pretrained
+        
+        # Pretrained backbone
+        self.backbone = self._build_backbone()
+        
+        # ASPP module
+        self.aspp = self._build_aspp()
+        
+        # Decoder
+        self.decoder = self._build_decoder()
+        
+        # Final classification layer
+        self.final_conv = layers.Conv2D(
+            num_classes,
+            1,
+            activation='softmax' if num_classes > 1 else 'sigmoid',
+            name='segmentation_output'
+        )
+    
+    def _build_backbone(self):
+        """Build backbone network"""
+        params_model = self.models_config.SEGMENTATION_MODELS[self.backbone_name.lower()]
+        input_shape = params_model['input_shape']
+        pretrained_weights = params_model['pretrained_weights'] if self.pretrained else None
+        freeze_backbone = params_model['freeze_backbone']
+        
+        if self.backbone_name == 'ResNet50':
+            backbone = keras.applications.ResNet50(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            # Use output from conv4_block6_out for low-level features
+            # and conv5_block3_out for high-level features
+            low_level_layer = 'conv2_block3_out'
+            high_level_layer = 'conv5_block3_out'
+        else:
+            raise ValueError(f"Unsupported backbone: {self.backbone_name}")
+        
+        low_level_output = backbone.get_layer(low_level_layer).output
+        high_level_output = backbone.get_layer(high_level_layer).output
+        
+        model = keras.Model(
+            backbone.input,
+            [low_level_output, high_level_output]
         )
         
         return model
+    
+    def _build_aspp(self):
+        """Build Atrous Spatial Pyramid Pooling module"""
+        def aspp_block(x, filters=256, rate=1):
+            if rate == 1:
+                conv = layers.Conv2D(filters, 1, padding='same', activation='relu')
+            else:
+                conv = layers.Conv2D(filters, 3, padding='same', dilation_rate=rate, activation='relu')
+            
+            x = conv(x)
+            x = layers.BatchNormalization()(x)
+            return x
+        
+        def aspp_module(inputs):
+            # Different dilation rates
+            aspp1 = aspp_block(inputs, rate=1)
+            aspp2 = aspp_block(inputs, rate=6)
+            aspp3 = aspp_block(inputs, rate=12)
+            aspp4 = aspp_block(inputs, rate=18)
+            
+            # Global average pooling
+            image_pooling = layers.GlobalAveragePooling2D()(inputs)
+            image_pooling = layers.Dense(256, activation='relu')(image_pooling)
+            image_pooling = layers.Reshape((1, 1, 256))(image_pooling)
+            image_pooling = layers.UpSampling2D(
+                size=(tf.shape(inputs)[1], tf.shape(inputs)[2]),
+                interpolation='bilinear'
+            )(image_pooling)
+            
+            # Concatenate all branches
+            concat = layers.Concatenate()([aspp1, aspp2, aspp3, aspp4, image_pooling])
+            
+            # Final conv
+            output = layers.Conv2D(256, 1, padding='same', activation='relu')(concat)
+            output = layers.BatchNormalization()(output)
+            
+            return output
+        
+        return aspp_module
+    
+    def _build_decoder(self):
+        """Build decoder module"""
+        def decoder_module(high_level_features, low_level_features):
+            # Upsample high-level features
+            upsampled = layers.UpSampling2D(size=4, interpolation='bilinear')(high_level_features)
+            
+            # Process low-level features
+            low_level = layers.Conv2D(48, 1, padding='same', activation='relu')(low_level_features)
+            low_level = layers.BatchNormalization()(low_level)
+            
+            # Concatenate
+            concat = layers.Concatenate()([upsampled, low_level])
+            
+            # Refine features
+            x = layers.Conv2D(256, 3, padding='same', activation='relu')(concat)
+            x = layers.BatchNormalization()(x)
+            x = layers.Conv2D(256, 3, padding='same', activation='relu')(x)
+            x = layers.BatchNormalization()(x)
+            
+            return x
+        
+        return decoder_module
+    
+    def call(self, inputs, training=None):
+        """Forward pass"""
+        # Extract features
+        low_level_features, high_level_features = self.backbone(inputs, training=training)
+        
+        # Apply ASPP
+        aspp_features = self.aspp(high_level_features)
+        
+        # Decode features
+        decoded = self.decoder(aspp_features, low_level_features)
+        
+        # Upsample to original resolution
+        upsampled = layers.UpSampling2D(size=4, interpolation='bilinear')(decoded)
+        
+        # Final classification
+        output = self.final_conv(upsampled)
+        
+        return output
 
-    def compile(self, learning_rate=1e-4):
-        """Compile the model with appropriate loss functions."""
-        self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-            loss=tf.keras.losses.SparseCategoricalCrossentropy(),
-            metrics=['accuracy', tf.keras.metrics.MeanIoU(num_classes=3)]
-        )
-
-    def get_model(self):
-        """Return the built model."""
-        return self.model
+def create_segmentation_model(model_type: str, num_classes: int, config: Config = None, **kwargs) -> SegmentationModel:
+    """Factory function to create segmentation models"""
+    
+    if model_type == 'simple_unet':
+        return SimpleUNet(num_classes, config, **kwargs)
+    elif model_type == 'pretrained_unet':
+        backbone = kwargs.get('backbone', 'ResNet50')
+        return PretrainedUNet(num_classes, backbone, config, **kwargs)
+    elif model_type == 'deeplabv3plus':
+        backbone = kwargs.get('backbone', 'ResNet50')
+        return DeepLabV3Plus(num_classes, backbone, config, **kwargs)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")

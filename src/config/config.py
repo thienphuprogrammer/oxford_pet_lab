@@ -1,7 +1,10 @@
 # config/config.py
 import os
 from pathlib import Path
+from dataclasses import dataclass
 
+
+@dataclass
 class Config:
     """Global configuration for the Oxford Pet Lab project."""
     
@@ -95,3 +98,24 @@ class Config:
         
         for directory in directories:
             os.makedirs(directory, exist_ok=True)
+
+
+    @classmethod
+    def get_class_names(cls) -> List[str]:
+        """Get Oxford Pet dataset class names"""
+        return [
+            'Abyssinian', 'Bengal', 'Birman', 'Bombay', 'British_Shorthair',
+            'Egyptian_Mau', 'Maine_Coon', 'Persian', 'Ragdoll', 'Russian_Blue',
+            'Siamese', 'Sphynx', 'american_bulldog', 'american_pit_bull_terrier',
+            'basset_hound', 'beagle', 'boxer', 'chihuahua', 'english_cocker_spaniel',
+            'english_setter', 'german_shorthaired', 'great_pyrenees', 'havanese',
+            'japanese_chin', 'keeshond', 'leonberger', 'miniature_pinscher',
+            'newfoundland', 'pomeranian', 'pug', 'saint_bernard', 'samoyed',
+            'scottish_terrier', 'shiba_inu', 'staffordshire_bull_terrier',
+            'wheaten_terrier', 'yorkshire_terrier'
+        ]
+
+    @classmethod
+    def get_segmentation_class_names(cls) -> List[str]:
+        """Get segmentation class names"""
+        return ['background', 'pet', 'border']
