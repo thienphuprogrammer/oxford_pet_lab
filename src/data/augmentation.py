@@ -1,5 +1,4 @@
 import tensorflow as tf
-import tensorflow_addons as tfa
 from typing import Tuple, Optional, Dict, Any
 from src.config.config import Config
 
@@ -92,6 +91,47 @@ class DataAugmentor:
         
         return tf.cond(should_flip, flip_fn, lambda: (image, bbox, mask))
 
+    def rotate_image_tf(self, image, angle, interpolation='bilinear'):
+        # image: [H, W, C]
+        angle = -angle  # tf uses negative for counterclockwise
+        # Get shape
+        h, w = tf.shape(image)[0], tf.shape(image)[1]
+        # Convert radians to degrees
+        angle_deg = angle * 180.0 / tf.constant(3.14159265359)
+        # Center of rotation
+        cx, cy = tf.cast(w, tf.float32) / 2.0, tf.cast(h, tf.float32) / 2.0
+
+        # Make transformation matrix for rotate about center
+        angle_rad = angle
+        cos_a = tf.cos(angle_rad)
+        sin_a = tf.sin(angle_rad)
+        one = tf.constant(1, tf.float32)
+        zero = tf.constant(0, tf.float32)
+
+        # Translate so center is at origin, rotate, then translate back
+        # [x', y', 1] = M * [x, y, 1]
+        # Where M = T(-cx,-cy) * R(angle) * T(cx,cy)
+        tx = (one - cos_a) * cx - sin_a * cy
+        ty = sin_a * cx + (one - cos_a) * cy
+        transform = tf.stack([
+            cos_a, -sin_a, tx,
+            sin_a, cos_a, ty,
+            zero, zero
+        ])
+        # tf.raw_ops.ImageProjectiveTransformV3 expects shape [N, 8]
+        transform = tf.expand_dims(transform, 0)
+        image = tf.expand_dims(image, 0)
+        return tf.squeeze(
+            tf.raw_ops.ImageProjectiveTransformV3(
+                images=image,
+                fill_value=0,
+                transforms=tf.cast(transform, tf.float32),
+                interpolation=interpolation.upper(),
+                output_shape=tf.shape(image)[1:3]
+            ),
+            0
+        )
+
     def random_rotation(self, image: tf.Tensor, bbox: tf.Tensor, mask: tf.Tensor, 
                        seed: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """Apply random rotation using TensorFlow Addons."""
@@ -102,8 +142,8 @@ class DataAugmentor:
         )
         
         # Rotate image and mask
-        rotated_image = tfa.image.rotate(image, angle, interpolation='bilinear')
-        rotated_mask = tfa.image.rotate(mask, angle, interpolation='nearest')
+        rotated_image = self.rotate_image_tf(image, angle, interpolation='bilinear')
+        rotated_mask = self.rotate_image_tf(mask, angle, interpolation='nearest')
         
         # Create rotation matrix
         cos_a = tf.cos(angle)
@@ -119,6 +159,44 @@ class DataAugmentor:
         rotated_bbox = self._transform_bbox(bbox, transform_matrix)
         
         return rotated_image, rotated_bbox, rotated_mask
+
+    def affine_matrix_to_flat_tf(self, matrix):
+        # matrix: [3,3] hoặc [N,3,3]
+        # trả về: [8] hoặc [N,8]
+        if len(matrix.shape) == 2:
+            # [3,3]
+            matrix = tf.reshape(matrix, [3,3])
+            flat = [
+                matrix[0,0], matrix[0,1], matrix[0,2],
+                matrix[1,0], matrix[1,1], matrix[1,2],
+                matrix[2,0], matrix[2,1]
+            ]
+            return tf.stack(flat)
+        else:
+            # [N,3,3]
+            m = matrix
+            flat = tf.stack([
+                m[:,0,0], m[:,0,1], m[:,0,2],
+                m[:,1,0], m[:,1,1], m[:,1,2],
+                m[:,2,0], m[:,2,1]
+            ], axis=1)
+            return flat
+        
+
+    def transform_image_tf(self, image, transform_matrix, interpolation='bilinear'):
+        # image: [H, W, C], transform_matrix: [3,3]
+        flat = self.affine_matrix_to_flat_tf(transform_matrix)
+        flat = tf.expand_dims(flat, 0)
+        image = tf.expand_dims(image, 0)
+        out = tf.raw_ops.ImageProjectiveTransformV3(
+            images=image,
+            transforms=tf.cast(flat, tf.float32),
+            interpolation=interpolation.upper(),
+            output_shape=tf.shape(image)[1:3],
+            fill_value=0
+        )
+        return tf.squeeze(out, 0)
+
 
     def random_scale_and_translate(self, image: tf.Tensor, bbox: tf.Tensor, mask: tf.Tensor, 
                                  seed: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
@@ -152,17 +230,9 @@ class DataAugmentor:
         ])
         
         # Apply transformation
-        transformed_image = tfa.image.transform(
-            image, 
-            tfa.image.transform_ops.matrices_to_flat_transforms(tf.expand_dims(transform_matrix, 0)),
-            interpolation='bilinear'
-        )[0]
+        transformed_image = self.transform_image_tf(image, transform_matrix, interpolation='bilinear')
         
-        transformed_mask = tfa.image.transform(
-            mask,
-            tfa.image.transform_ops.matrices_to_flat_transforms(tf.expand_dims(transform_matrix, 0)),
-            interpolation='nearest'
-        )[0]
+        transformed_mask = self.transform_image_tf(mask, transform_matrix, interpolation='nearest')
         
         transformed_bbox = self._transform_bbox(bbox, transform_matrix)
         
@@ -192,17 +262,9 @@ class DataAugmentor:
         ])
         
         # Apply transformation
-        sheared_image = tfa.image.transform(
-            image,
-            tfa.image.transform_ops.matrices_to_flat_transforms(tf.expand_dims(transform_matrix, 0)),
-            interpolation='bilinear'
-        )[0]
+        sheared_image = self.transform_image_tf(image, transform_matrix, interpolation='bilinear')
         
-        sheared_mask = tfa.image.transform(
-            mask,
-            tfa.image.transform_ops.matrices_to_flat_transforms(tf.expand_dims(transform_matrix, 0)),
-            interpolation='nearest'
-        )[0]
+        sheared_mask = self.transform_image_tf(mask, transform_matrix, interpolation='nearest')
         
         sheared_bbox = self._transform_bbox(bbox, transform_matrix)
         
@@ -213,9 +275,12 @@ class DataAugmentor:
         seeds = tf.random.experimental.stateless_split(seed, 4)
         
         # Get image dimensions
-        image_shape = tf.shape(image)
-        height = tf.cast(image_shape[0], tf.float32)
-        width = tf.cast(image_shape[1], tf.float32)
+        height_int = tf.shape(image)[0]
+        width_int = tf.shape(image)[1]
+        
+        # Cast to float32 for subsequent arithmetic operations to avoid dtype mismatch
+        height = tf.cast(height_int, tf.float32)
+        width = tf.cast(width_int, tf.float32)
         
         # Random cutout parameters
         cutout_area = tf.random.stateless_uniform([], seed=seeds[0], minval=0.02, maxval=0.3)
@@ -240,7 +305,7 @@ class DataAugmentor:
         y2 = tf.cast(cutout_y + cutout_height, tf.int32)
         
         # Create cutout mask
-        cutout_mask = tf.ones([height, width], dtype=tf.float32)
+        cutout_mask = tf.ones([height_int, width_int], dtype=tf.float32)
         
         # Create indices for the cutout region
         y_indices, x_indices = tf.meshgrid(tf.range(y1, y2), tf.range(x1, x2), indexing='ij')
@@ -358,7 +423,7 @@ class DataAugmentor:
             return image, bbox, mask
         
         if seed is None:
-            seed = tf.random.uniform([], maxval=2**31-1, dtype=tf.int32)
+            seed = tf.random.uniform([2], maxval=2**31-1, dtype=tf.int32)
         
         # Ensure inputs are float32
         image = tf.cast(image, tf.float32)
@@ -368,6 +433,8 @@ class DataAugmentor:
         mask = tf.cast(mask, tf.float32)
         if len(tf.shape(mask)) == 3 and tf.shape(mask)[-1] == 1:
             mask = tf.squeeze(mask, -1)
+        if len(tf.shape(mask)) == 2:
+            mask = tf.expand_dims(mask, -1)
         
         # Split seeds for different augmentations
         seeds = tf.random.experimental.stateless_split(seed, 12)
@@ -409,9 +476,7 @@ class DataAugmentor:
             return sample
 
         if seed is None:
-            seed = tf.random.uniform([], maxval=2**31-1, dtype=tf.int32)
-        else:
-            seed = tf.constant(seed, dtype=tf.int32)
+            seed = tf.random.uniform([2], maxval=2**31-1, dtype=tf.int32)
 
         # Extract components
         image = sample['image']
@@ -434,29 +499,15 @@ class DataAugmentor:
     def create_augmented_dataset(self, dataset: tf.data.Dataset, 
                                augmentation_factor: int = 2) -> tf.data.Dataset:
         """Create augmented dataset with multiple versions of each sample."""
-        def augment_fn(sample):
-            augmented_samples = []
-            for i in range(augmentation_factor):
-                seed = tf.random.uniform([], maxval=2**31-1, dtype=tf.int32)
-                aug_sample = self.__call__(sample, seed)
-                augmented_samples.append(aug_sample)
-            return augmented_samples
-        
-        # Apply augmentation and flatten
-        augmented_dataset = dataset.map(
-            augment_fn, 
-            num_parallel_calls=tf.data.AUTOTUNE
-        )
-        
-        # Flatten the dataset
-        def flatten_fn(samples):
-            return tf.data.Dataset.from_tensor_slices({
-                'image': tf.stack([s['image'] for s in samples]),
-                'head_bbox': tf.stack([s['head_bbox'] for s in samples]),
-                'segmentation_mask': tf.stack([s['segmentation_mask'] for s in samples]),
-                'label': tf.stack([s['label'] for s in samples]),
-                'species': tf.stack([s['species'] for s in samples]),
-                'file_name': tf.stack([s['file_name'] for s in samples])
-            })
-        
-        return augmented_dataset.flat_map(flatten_fn)
+        # First replicate each sample `augmentation_factor` times
+        def replicate_fn(sample):
+            return tf.data.Dataset.from_tensors(sample).repeat(augmentation_factor)
+
+        replicated_dataset = dataset.flat_map(replicate_fn)
+
+        # Apply augmentation on each replicated sample independently
+        def augment_map(sample):
+            seed = tf.random.uniform([2], maxval=2**31 - 1, dtype=tf.int32)
+            return self.__call__(sample, seed)
+
+        return replicated_dataset.map(augment_map, num_parallel_calls=tf.data.AUTOTUNE)

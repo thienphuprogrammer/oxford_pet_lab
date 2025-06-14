@@ -21,7 +21,7 @@ class DataPreprocessor:
         # Advanced preprocessing options
         self.use_imagenet_normalization = getattr(config, 'USE_IMAGENET_NORM', True)
         self.preserve_aspect_ratio = getattr(config, 'PRESERVE_ASPECT_RATIO', True)
-        self.pad_to_square = getattr(config, 'PAD_TO_SQUARE', False)
+        self.pad_to_square = getattr(config, 'PAD_TO_SQUARE', True)
 
     @tf.function
     def normalize_image(self, image: tf.Tensor, method: str = 'standard') -> tf.Tensor:
@@ -74,7 +74,7 @@ class DataPreprocessor:
                 image = tf.image.resize_with_crop_or_pad(image, target_h, target_w)
         else:
             # Standard resize (may distort aspect ratio)
-            image = tf.image.resize(target_size, antialias=True)
+            image = tf.image.resize(image, target_size, antialias=True)
             
         return image
 
@@ -371,7 +371,7 @@ class DataPreprocessor:
     @tf.function
     def _compute_bbox_area(self, bbox: tf.Tensor) -> tf.Tensor:
         """Compute normalized bbox area."""
-        xmin, ymin, xmax, ymax = tf.unstack(bbox)
+        xmin, ymin, xmax, ymax = tf.unstack(bbox, axis=-1)
         return (xmax - xmin) * (ymax - ymin)
 
     def _format_for_task_enhanced(self, processed_sample: Dict[str, tf.Tensor], task: str):
@@ -390,7 +390,7 @@ class DataPreprocessor:
         ds: tf.data.Dataset,
         batch_size: int,
         shuffle: bool = False,
-        task: str = "multitask",
+        task: str = "detection",
         cache_filename: Optional[str] = None,
         repeat: bool = False,
     ) -> tf.data.Dataset:
@@ -472,7 +472,7 @@ class DataPreprocessor:
         self,
         ds: tf.data.Dataset,
         batch_size: int,
-        task: str = "multitask",
+        task: str = "detection",
     ) -> tf.data.Dataset:
         """Create optimized validation dataset without augmentation."""
         return self.prepare_dataset_optimized(
@@ -487,7 +487,7 @@ class DataPreprocessor:
         self,
         ds: tf.data.Dataset,
         batch_size: int,
-        task: str = "multitask",
+        task: str = "detection",
         cache_filename: Optional[str] = None,
     ) -> tf.data.Dataset:
         """Create optimized training dataset with full preprocessing."""
