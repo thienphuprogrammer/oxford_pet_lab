@@ -40,7 +40,7 @@ class Config:
         dir_path.mkdir(parents=True, exist_ok=True)
     
     # Dataset configuration
-    DATASET_NAME = "oxford_iiit_pet:4.0.0"
+    DATASET_NAME = "oxford_iiit_pet"
     DATASET_VERSION = "4.0.0"
 
     # Model configuration
