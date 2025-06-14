@@ -7,7 +7,6 @@ import tensorflow as tf
 from tensorflow.keras.callbacks import Callback
 import matplotlib.pyplot as plt
 import json
-from src.config.config import Config
 
 class EarlyStopping(Callback):
     """Custom early stopping callback with more control"""

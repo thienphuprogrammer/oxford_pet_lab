@@ -2,8 +2,8 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, models
 from tensorflow.keras.applications import ResNet50, MobileNetV2, EfficientNetB0
-from src.config.model_configs import ModelConfigs
-from src.config.config import Config
+
+from src.config import ModelConfigs, Config
 from src.models.base_model import BaseDetectionModel
 
 class SimpleDetectionModel(BaseDetectionModel):
@@ -210,7 +210,7 @@ class PretrainedDetectionModel(BaseDetectionModel):
         }
 
 
-class YOLOv3Model(DetectionModel):
+class YOLOv3Model(BaseDetectionModel):
     """Simple YOLO-like detection model"""
     
     def __init__(self, num_classes: int, config: Config = None, models_config: ModelConfigs = None, **kwargs):

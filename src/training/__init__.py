@@ -1,5 +1,21 @@
-from .trainer import Trainer
-from .callbacks import CustomCallbacks
-from .metrics import Metrics
+__all__ = [
+    'Trainer',
+    'EarlyStopping',
+    'ModelCheckpoint',
+    'LearningRateScheduler',
+    'ProgressLogger',
+    'MultiTaskMetricsLogger',
+    'DetectionMetrics',
+    'SegmentationMetrics',
+    'MultiTaskMetrics',
+]
 
-__all__ = ['Trainer', 'CustomCallbacks', 'Metrics']
+from .trainer import Trainer
+from .callbacks import (
+    EarlyStopping,
+    ModelCheckpoint,
+    LearningRateScheduler,
+    ProgressLogger,
+    MultiTaskMetricsLogger,
+)
+from .metrics import DetectionMetrics, SegmentationMetrics, MultiTaskMetrics

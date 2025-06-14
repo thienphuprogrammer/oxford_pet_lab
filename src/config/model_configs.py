@@ -1,5 +1,6 @@
 # config/model_configs.py
 from dataclasses import dataclass
+from typing import Dict, Any
 
 @dataclass
 class ModelConfigs:
@@ -92,25 +93,55 @@ class ModelConfigs:
                 }
         
         # Multitask model configuration
-        if self.MULTITASK_MODEL is None:
-            self.MULTITASK_MODEL = {
-            "backbone": "ResNet50",
-            "input_shape": (224, 224, 3),
-            "pretrained_weights": "imagenet",
-            "freeze_backbone": False,
-            "shared_features": 512,
-            "detection_head_units": [256, 128, 64],
-            "segmentation_decoder_filters": [512, 256, 128, 64, 32],
-            "bbox_output_units": 4,
-            "class_output_units": 37,
-            "seg_output_units": 3,
-            "loss_weights": {
-                "detection": 1.0,
-                "segmentation": 1.0,
-                "bbox": 1.0,
-                "classification": 1.0
+        if self.MULTITASK_MODELS is None:
+            self.MULTITASK_MODELS = {
+                "resnet50": {
+                    "input_shape": (224, 224, 3),
+                    "feature_dim": 2048,
+                    "pretrained_weights": "imagenet",
+                    "freeze_backbone": False,
+                    "shared_features": 512,
+                    "detection_head_units": [512, 256, 128, 64],
+                    "detection_head_dropout": 0.5,
+                    "classification_head_units": [512, 256, 128, 64],
+                    "classification_head_dropout": 0.5,
+                    "segmentation_head_units": [512, 256, 128, 64],
+                    "segmentation_head_dropout": 0.3,
+                    "bbox_output_units": 4,
+                    "class_output_units": 37,
+                    "seg_output_units": 3,
+                    "loss_weights": {
+                        "detection": 1.0,
+                        "segmentation": 1.0,
+                        "bbox": 1.0,
+                        "classification": 1.0
+                        }
+                },
+                "efficientnetb0": {
+                    "input_shape": (224, 224, 3),
+                    "feature_dim": 1280,
+                    "pretrained_weights": "imagenet",
+                    "freeze_backbone": False,
+                    "shared_features": 512,
+                    "detection_head_units": [512, 256, 128, 64],
+                    "detection_head_dropout": 0.5,
+                    "classification_head_units": [512, 256, 128, 64],
+                    "classification_head_dropout": 0.5,
+                    "segmentation_head_units": [512, 256, 128, 64],
+                    "segmentation_head_dropout": 0.3,
+                    "bbox_output_units": 4,
+                    "class_output_units": 37,
+                    "seg_output_units": 3,
+                    "loss_weights": {
+                        "detection": 1.0,
+                        "segmentation": 1.0,
+                        "bbox": 1.0,
+                        "classification": 1.0
+                    }
+                }
             }
-        }
+
+        
         
         # Loss function configurations
         if self.LOSS_CONFIGS is None:

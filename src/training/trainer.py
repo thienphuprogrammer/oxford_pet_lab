@@ -6,20 +6,19 @@ import os
 import time
 import json
 import logging
-from typing import Dict, List, Any, Optional, Tuple, Callable
+from typing import Dict, List, Any, Optional
 from pathlib import Path
 
 import tensorflow as tf
-import numpy as np
-from tensorflow.keras.callbacks import Callback
 
-from src.config.config import Config
+from src.config import Config
 from src.training.losses import DetectionLoss, SegmentationLoss
 from src.training.metrics import DetectionMetrics, SegmentationMetrics
 from src.training.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler
 from src.training.optimizers import get_optimizer_config
 from src.utils.file_utils import save_json, load_json
 from src.utils.plot_utils import plot_training_history
+from src.models.base_model import BaseModel
 
 
 class TrainingLogger:
@@ -82,7 +81,7 @@ class Trainer:
     
     def __init__(
         self,
-        model: tf.keras.Model,
+        model: BaseModel,
         task_type: str,
         log_dir: str,
         checkpoint_dir: str,

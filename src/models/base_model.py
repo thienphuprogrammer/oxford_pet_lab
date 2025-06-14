@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras import Model
 from typing import Dict, Tuple
-from abc import abstractmethod
+from abc import abstractmethod 
 
 class BaseModel(Model):
   def __init__(self, num_classes: int, **kwargs):
@@ -119,6 +119,7 @@ class BaseSegmentationModel(BaseModel):
         
         return mask
 
+
 class BaseMultitaskModel(BaseModel):
     """Base class for multitask models (detection + segmentation)"""
     
@@ -200,7 +201,7 @@ class ModelBuilder:
         **kwargs
     ) -> BaseDetectionModel:
         """Build detection model"""
-        from .detection_models import SimpleDetectionModel, PretrainedDetectionModel
+        from src.models.detection_model import SimpleDetectionModel, PretrainedDetectionModel
         
         if model_type == 'simple':
             return SimpleDetectionModel(num_classes, config=config, **kwargs)
@@ -220,7 +221,7 @@ class ModelBuilder:
         **kwargs
     ) -> BaseSegmentationModel:
         """Build segmentation model"""
-        from .segmentation_models import SimpleUNet, PretrainedUNet, DeepLabV3Plus
+        from src.models.segmentation_model import SimpleUNet, PretrainedUNet, DeepLabV3Plus
         
         if model_type == 'simple_unet':
             return SimpleUNet(num_classes, config=config, **kwargs)
@@ -235,7 +236,12 @@ class ModelBuilder:
                 num_classes, backbone_name=backbone, config=config, **kwargs
             )
         else:
-            raise ValueError(f"Unknown segmentation model type: {model_type}")
+            # Delegate to segmentation_model factory for additional SOTA architectures
+            from src.models.segmentation_model import create_segmentation_model
+            try:
+                return create_segmentation_model(model_type, num_classes, config=config, **kwargs)
+            except Exception as e:
+                raise ValueError(f"Unknown segmentation model type: {model_type}. {e}")
     
     @staticmethod
     def build_multitask_model(
@@ -246,7 +252,7 @@ class ModelBuilder:
         **kwargs
     ) -> BaseMultitaskModel:
         """Build multitask model"""
-        from .multitask_model import MultitaskModel
+        from src.models.multitask_model import MultitaskModel
         
         if model_type == 'resnet50_multitask':
             return MultitaskModel(

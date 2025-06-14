@@ -1,28 +1,25 @@
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
-from typing import List, Tuple, Optional
-from src.config.model_configs import ModelConfigs
-from src.config.config import Config
 
-class SegmentationModel(keras.Model):
-    """Base class for semantic segmentation models"""
-    
-    def __init__(self, num_classes: int, **kwargs):
-        super().__init__(**kwargs)
-        self.num_classes = num_classes
-    
-    def call(self, inputs, training=None):
-        raise NotImplementedError("Subclasses must implement call method")
+from typing import List, Tuple, Optional, Callable
+from src.config import ModelConfigs, Config
+from src.models.base_model import BaseSegmentationModel
 
-class SimpleUNet(SegmentationModel):
+try:
+    import segmentation_models as sm
+    sm.set_framework('tf.keras')
+except ImportError:  # pragma: no cover
+    sm = None
+
+class SimpleUNet(BaseSegmentationModel):
     """Simple U-Net architecture without pretrained backbone"""
     
     def __init__(
         self, 
         num_classes: int, 
-        config: Config = None, 
-        models_config: ModelConfigs = None, 
+        config: Optional[Config] = None, 
+        models_config: Optional[ModelConfigs] = None, 
         **kwargs
     ):
         super().__init__(num_classes, **kwargs)
@@ -43,7 +40,7 @@ class SimpleUNet(SegmentationModel):
             name='segmentation_output'
         )
         
-    def _build_encoder(self):
+    def _build_encoder(self) -> List[keras.Sequential]:
         """Build encoder blocks"""
         params = self.models_config.SEGMENTATION_MODELS[self.model_name.lower()]
         filters = params['encoder_filters']
@@ -60,7 +57,7 @@ class SimpleUNet(SegmentationModel):
             
         return encoder_blocks
     
-    def _build_decoder(self):
+    def _build_decoder(self) -> List[keras.Sequential]:
         """Build decoder blocks"""
         params = self.models_config.SEGMENTATION_MODELS[self.model_name.lower()]
         filters = params['decoder_filters']
@@ -78,7 +75,7 @@ class SimpleUNet(SegmentationModel):
             
         return decoder_blocks
     
-    def call(self, inputs, training=None):
+    def call(self, inputs, training=None) -> tf.Tensor:
         """Forward pass with skip connections"""
         # Encoder path
         skip_connections = []
@@ -107,7 +104,7 @@ class SimpleUNet(SegmentationModel):
         
         return output
 
-class PretrainedUNet(SegmentationModel):
+class PretrainedUNet(BaseSegmentationModel):
     """U-Net with pretrained encoder backbone"""
     
     def __init__(
@@ -115,8 +112,8 @@ class PretrainedUNet(SegmentationModel):
         num_classes: int, 
         pretrained: bool = True,
         backbone_name: str = 'ResNet50', 
-        config: Config = None, 
-        models_config: ModelConfigs = None, 
+        config: Optional[Config] = None, 
+        models_config: Optional[ModelConfigs] = None, 
         **kwargs
     ):
         super().__init__(num_classes, **kwargs)
@@ -140,7 +137,7 @@ class PretrainedUNet(SegmentationModel):
             name='segmentation_output'
         )
         
-    def _build_pretrained_encoder(self):
+    def _build_pretrained_encoder(self) -> keras.Model:
         """Build pretrained encoder"""
         params_model = self.models_config.SEGMENTATION_MODELS[self.backbone_name.lower()]
         input_shape = params_model['input_shape']
@@ -174,6 +171,59 @@ class PretrainedUNet(SegmentationModel):
                 'block6a_expand_activation',  # 14x14
                 'top_activation'              # 7x7
             ]
+        elif self.backbone_name == 'MobileNetV2':
+            backbone = keras.applications.MobileNetV2(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            layer_names = [
+                'block_1_expand_relu',  # 112x112
+                'block_3_expand_relu',  # 56x56
+                'block_6_expand_relu',  # 28x28
+                'block_13_expand_relu',  # 14x14
+                'block_16_project'       # 7x7
+            ]
+        elif self.backbone_name == 'MobileNetV3':
+            backbone = keras.applications.MobileNetV3(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            layer_names = [
+                'block_1_expand_relu',  # 112x112
+                'block_3_expand_relu',  # 56x56
+                'block_6_expand_relu',  # 28x28
+                'block_13_expand_relu',  # 14x14
+                'block_16_project'       # 7x7
+            ]
+
+        elif self.backbone_name == 'DenseNet121':
+            backbone = keras.applications.DenseNet121(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            layer_names = [
+                'conv1_relu',           # 112x112
+                'conv2_block3_out',     # 56x56  
+                'conv3_block4_out',     # 28x28
+                'conv4_block6_out',     # 14x14
+                'conv5_block3_out'      # 7x7
+            ]
+        elif self.backbone_name == 'DenseNet169':
+            backbone = keras.applications.DenseNet169(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            layer_names = [
+                'conv1_relu',           # 112x112
+                'conv2_block3_out',     # 56x56  
+                'conv3_block4_out',     # 28x28
+                'conv4_block6_out',     # 14x14
+                'conv5_block3_out'      # 7x7
+            ]
         else:
             raise ValueError(f"Unsupported backbone: {self.backbone_name}")
         
@@ -188,7 +238,7 @@ class PretrainedUNet(SegmentationModel):
             
         return encoder
     
-    def _build_decoder(self):
+    def _build_decoder(self) -> List[keras.Sequential]:
         """Build decoder with skip connections"""
         decoder_blocks = []
         params_model = self.models_config.SEGMENTATION_MODELS[self.backbone_name.lower()]
@@ -206,7 +256,7 @@ class PretrainedUNet(SegmentationModel):
             
         return decoder_blocks
     
-    def call(self, inputs, training=None):
+    def call(self, inputs, training=None) -> tf.Tensor:
         """Forward pass"""
         # Encoder - extract multi-scale features
         encoder_outputs = self.encoder(inputs, training=training)
@@ -234,7 +284,7 @@ class PretrainedUNet(SegmentationModel):
         
         return output
 
-class DeepLabV3Plus(SegmentationModel):
+class DeepLabV3Plus(BaseSegmentationModel):
     """DeepLabV3+ implementation"""
     
     def __init__(
@@ -242,8 +292,8 @@ class DeepLabV3Plus(SegmentationModel):
         num_classes: int, 
         pretrained: bool = True,
         backbone_name: str = 'ResNet50', 
-        config: Config = None, 
-        models_config: ModelConfigs = None,
+        config: Optional[Config] = None, 
+        models_config: Optional[ModelConfigs] = None,
         **kwargs
     ):
         super().__init__(num_classes, **kwargs)
@@ -270,7 +320,7 @@ class DeepLabV3Plus(SegmentationModel):
             name='segmentation_output'
         )
     
-    def _build_backbone(self):
+    def _build_backbone(self) -> keras.Model:
         """Build backbone network"""
         params_model = self.models_config.SEGMENTATION_MODELS[self.backbone_name.lower()]
         input_shape = params_model['input_shape']
@@ -287,6 +337,46 @@ class DeepLabV3Plus(SegmentationModel):
             # and conv5_block3_out for high-level features
             low_level_layer = 'conv2_block3_out'
             high_level_layer = 'conv5_block3_out'
+        elif self.backbone_name == 'MobileNetV2':
+            backbone = keras.applications.MobileNetV2(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            low_level_layer = 'block_3_expand_relu'
+            high_level_layer = 'block_16_project'
+        elif self.backbone_name == 'MobileNetV3':
+            backbone = keras.applications.MobileNetV3(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            low_level_layer = 'block_3_expand_relu'
+            high_level_layer = 'block_16_project'
+        elif self.backbone_name == 'DenseNet121':
+            backbone = keras.applications.DenseNet121(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            low_level_layer = 'conv2_block3_out'
+            high_level_layer = 'conv5_block3_out'
+        elif self.backbone_name == 'DenseNet169':
+            backbone = keras.applications.DenseNet169(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            low_level_layer = 'conv2_block3_out'
+            high_level_layer = 'conv5_block3_out'
+        elif self.backbone_name == 'EfficientNetB0':
+            backbone = keras.applications.EfficientNetB0(
+                input_shape=input_shape,
+                weights=pretrained_weights,
+                include_top=False
+            )
+            low_level_layer = 'block2a_expand_activation'
+            high_level_layer = 'top_activation'
         else:
             raise ValueError(f"Unsupported backbone: {self.backbone_name}")
         
@@ -300,7 +390,7 @@ class DeepLabV3Plus(SegmentationModel):
         
         return model
     
-    def _build_aspp(self):
+    def _build_aspp(self) -> Callable[[tf.Tensor], tf.Tensor]:
         """Build Atrous Spatial Pyramid Pooling module"""
         def aspp_block(x, filters=256, rate=1):
             if rate == 1:
@@ -339,7 +429,7 @@ class DeepLabV3Plus(SegmentationModel):
         
         return aspp_module
     
-    def _build_decoder(self):
+    def _build_decoder(self) -> Callable[[tf.Tensor, tf.Tensor], tf.Tensor]:
         """Build decoder module"""
         def decoder_module(high_level_features, low_level_features):
             # Upsample high-level features
@@ -381,16 +471,69 @@ class DeepLabV3Plus(SegmentationModel):
         
         return output
 
-def create_segmentation_model(model_type: str, num_classes: int, config: Config = None, **kwargs) -> SegmentationModel:
+class SMKerasWrapper(BaseSegmentationModel):
+    """Wrap a segmentation-models Keras model so it plugs into our BaseSegmentationModel API."""
+
+    def __init__(self, keras_model: keras.Model, num_classes: int, **kwargs):
+        super().__init__(num_classes, **kwargs)
+        self._model = keras_model
+
+    def call(self, inputs, training=None, mask=None):  # type: ignore[override]
+        return self._model(inputs, training=training)
+
+def create_segmentation_model(
+    model_type: str,
+    num_classes: int,
+    backbone: str = 'ResNet50',
+    pretrained: bool = True,
+    config: Optional[Config] = None,
+    models_config: Optional[ModelConfigs] = None,
+    **kwargs
+) -> BaseSegmentationModel:
     """Factory function to create segmentation models"""
-    
     if model_type == 'simple_unet':
-        return SimpleUNet(num_classes, config, **kwargs)
+        return SimpleUNet(
+            num_classes=num_classes,
+            config=config,
+            models_config=models_config,
+            **kwargs
+        )
     elif model_type == 'pretrained_unet':
-        backbone = kwargs.get('backbone', 'ResNet50')
-        return PretrainedUNet(num_classes, backbone, config, **kwargs)
+        return PretrainedUNet(
+            num_classes=num_classes,
+            backbone=backbone,
+            pretrained=pretrained,
+            config=config,
+            models_config=models_config,
+            **kwargs
+        )
     elif model_type == 'deeplabv3plus':
-        backbone = kwargs.get('backbone', 'ResNet50')
-        return DeepLabV3Plus(num_classes, backbone, config, **kwargs)
+        return DeepLabV3Plus(
+            num_classes=num_classes,
+            backbone=backbone,
+            pretrained=pretrained,
+            config=config,
+            models_config=models_config,
+            **kwargs
+        )
+    elif model_type in ['unetpp', 'unetplusplus', 'unet_plus_plus', 'fpn', 'pspnet', 'linknet']:
+        if sm is None:
+            raise ImportError("segmentation-models package is required for model_type '{}'".format(model_type))
+        activation = 'softmax' if num_classes > 1 else 'sigmoid'
+        model_builder = {
+            'unetpp': sm.UnetPlusPlus,
+            'unetplusplus': sm.UnetPlusPlus,
+            'unet_plus_plus': sm.UnetPlusPlus,
+            'fpn': sm.FPN,
+            'pspnet': sm.PSPNet,
+            'linknet': sm.Linknet,
+        }[model_type]
+        keras_model = model_builder(
+            backbone_name=backbone.lower(),
+            classes=num_classes,
+            activation=activation,
+            encoder_weights='imagenet' if pretrained else None,
+        )
+        return SMKerasWrapper(keras_model, num_classes)
     else:
         raise ValueError(f"Unknown model type: {model_type}")

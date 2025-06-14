@@ -2,17 +2,35 @@
 Custom loss functions for object detection and semantic segmentation
 """
 import tensorflow as tf
-import numpy as np
+from typing import Dict, Any, Optional
 
+try: 
+    import tensorflow_addons as tfa
+except ModuleNotFoundError:
+    tfa = None
+
+try:
+    import keras_cv
+except ModuleNotFoundError:
+    keras_cv = None
 
 class SmoothL1Loss(tf.keras.losses.Loss):
     """Smooth L1 loss for bounding box regression"""
     
-    def __init__(self, beta=1.0, reduction=tf.keras.losses.Reduction.AUTO, name='smooth_l1_loss'):
+    def __init__(
+        self,
+        beta: float = 1.0,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'smooth_l1_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
         self.beta = beta
         
-    def call(self, y_true, y_pred):
+    def call(
+        self,
+        y_true: tf.Tensor,
+        y_pred: tf.Tensor
+    ) -> tf.Tensor:
         diff = tf.abs(y_true - y_pred)
         loss = tf.where(
             diff < self.beta,
@@ -21,7 +39,7 @@ class SmoothL1Loss(tf.keras.losses.Loss):
         )
         return tf.reduce_mean(loss, axis=-1)
     
-    def get_config(self):
+    def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
         config.update({'beta': self.beta})
         return config
@@ -30,13 +48,38 @@ class SmoothL1Loss(tf.keras.losses.Loss):
 class GIoULoss(tf.keras.losses.Loss):
     """Generalized IoU loss for bounding box regression"""
     
-    def __init__(self, reduction=tf.keras.losses.Reduction.AUTO, name='giou_loss'):
+    def __init__(
+        self,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'giou_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
-        
-    def call(self, y_true, y_pred):
+
+        if keras_cv is not None:
+            self.giou_loss = keras_cv.losses.GIoULoss(
+                reduction=reduction,
+                name=name
+            )
+        elif tfa is not None:
+            self.giou_loss = tfa.losses.GIoULoss(
+                reduction=reduction,
+                name=name
+            )
+        else:
+            self.giou_loss = None
+
+    @tf.function
+    def call(
+        self,
+        y_true: tf.Tensor,
+        y_pred: tf.Tensor
+    ) -> tf.Tensor:
         """
         y_true, y_pred: [batch_size, 4] in format [x1, y1, x2, y2]
         """
+        if self.giou_loss is not None:
+            return self.giou_loss(y_true, y_pred)
+        
         # Calculate intersection
         x1_max = tf.maximum(y_true[..., 0], y_pred[..., 0])
         y1_max = tf.maximum(y_true[..., 1], y_pred[..., 1])
@@ -71,31 +114,39 @@ class GIoULoss(tf.keras.losses.Loss):
 class FocalLoss(tf.keras.losses.Loss):
     """Focal loss for addressing class imbalance"""
     
-    def __init__(self, alpha=0.25, gamma=2.0, from_logits=False, 
-                 reduction=tf.keras.losses.Reduction.AUTO, name='focal_loss'):
+    def __init__(
+        self,
+        alpha: float = 0.25,
+        gamma: Optional[float] = 2.0,
+        from_logits: bool = False,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'focal_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
+
+        imp_cls = (
+            tf.keras.losses.BinaryCrossentropy 
+            if gamma is not None 
+            else tf.keras.losses.CategoricalCrossentropy
+        )
+        self._loss_fn = imp_cls(
+            alpha=alpha,
+            gamma=gamma,
+            reduction=reduction,
+            from_logits=from_logits
+        )
         self.alpha = alpha
         self.gamma = gamma
         self.from_logits = from_logits
         
-    def call(self, y_true, y_pred):
-        if self.from_logits:
-            y_pred = tf.nn.sigmoid(y_pred)
-            
-        # Calculate cross entropy
-        ce_loss = tf.keras.losses.binary_crossentropy(y_true, y_pred, from_logits=False)
+    def call(self,
+        y_true: tf.Tensor,
+        y_pred: tf.Tensor
+    ) -> tf.Tensor:
+        return self._loss_fn(y_true, y_pred)
         
-        # Calculate focal weight
-        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
-        alpha_t = y_true * self.alpha + (1 - y_true) * (1 - self.alpha)
-        focal_weight = alpha_t * tf.pow(1 - p_t, self.gamma)
-        
-        # Apply focal weight
-        focal_loss = focal_weight * ce_loss
-        
-        return focal_loss
     
-    def get_config(self):
+    def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
         config.update({
             'alpha': self.alpha,
@@ -108,11 +159,29 @@ class FocalLoss(tf.keras.losses.Loss):
 class DiceLoss(tf.keras.losses.Loss):
     """Dice loss for semantic segmentation"""
     
-    def __init__(self, smooth=1.0, reduction=tf.keras.losses.Reduction.AUTO, name='dice_loss'):
+    def __init__(self,
+        smooth: float = 1.0,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'dice_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
-        self.smooth = smooth
+        if hasattr(tf.keras.losses, 'Dice'):
+            self.dice_loss = tf.keras.losses.Dice(
+                smooth=smooth,
+                reduction=reduction,
+                name=name
+            )
+        else:
+            self.dice_loss = None
+            self.smooth = smooth
         
-    def call(self, y_true, y_pred):
+    def call(self,
+        y_true: tf.Tensor,
+        y_pred: tf.Tensor
+    ) -> tf.Tensor:
+        if self.dice_loss is not None:
+            return self.dice_loss(y_true, y_pred)
+        
         # Flatten the tensors
         y_true_flat = tf.reshape(y_true, [-1])
         y_pred_flat = tf.reshape(y_pred, [-1])
@@ -127,7 +196,7 @@ class DiceLoss(tf.keras.losses.Loss):
         # Return Dice loss
         return 1.0 - dice_coef
     
-    def get_config(self):
+    def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
         config.update({'smooth': self.smooth})
         return config
@@ -136,14 +205,35 @@ class DiceLoss(tf.keras.losses.Loss):
 class TverskyLoss(tf.keras.losses.Loss):
     """Tversky loss for handling class imbalance in segmentation"""
     
-    def __init__(self, alpha=0.7, beta=0.3, smooth=1.0, 
-                 reduction=tf.keras.losses.Reduction.AUTO, name='tversky_loss'):
+    def __init__(self,
+        alpha: float = 0.7,
+        beta: float = 0.3,
+        smooth: float = 1.0,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'tversky_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
-        self.alpha = alpha
-        self.beta = beta
-        self.smooth = smooth
+        if hasattr(tf.keras.losses, 'Tversky'):
+            self.tversky_loss = tf.keras.losses.Tversky(
+                alpha=alpha,
+                beta=beta,
+                smooth=smooth,
+                reduction=reduction,
+                name=name
+            )
+        else:
+            self.tversky_loss = None
+            self.alpha = alpha
+            self.beta = beta
+            self.smooth = smooth
         
-    def call(self, y_true, y_pred):
+    def call(self,
+        y_true: tf.Tensor,
+        y_pred: tf.Tensor
+    ) -> tf.Tensor:
+        if self.tversky_loss is not None:
+            return self.tversky_loss(y_true, y_pred)
+        
         # Flatten the tensors
         y_true_flat = tf.reshape(y_true, [-1])
         y_pred_flat = tf.reshape(y_pred, [-1])
@@ -159,7 +249,7 @@ class TverskyLoss(tf.keras.losses.Loss):
         # Return Tversky loss
         return 1.0 - tversky_index
     
-    def get_config(self):
+    def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
         config.update({
             'alpha': self.alpha,
@@ -172,21 +262,28 @@ class TverskyLoss(tf.keras.losses.Loss):
 class CombinedSegmentationLoss(tf.keras.losses.Loss):
     """Combined loss for segmentation (CrossEntropy + Dice)"""
     
-    def __init__(self, ce_weight=0.5, dice_weight=0.5, 
-                 reduction=tf.keras.losses.Reduction.AUTO, name='combined_seg_loss'):
+    def __init__(self,
+        ce_weight: float = 0.5,
+        dice_weight: float = 0.5,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'combined_seg_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
         self.ce_weight = ce_weight
         self.dice_weight = dice_weight
         self.ce_loss = tf.keras.losses.CategoricalCrossentropy()
         self.dice_loss = DiceLoss()
         
-    def call(self, y_true, y_pred):
+    def call(self,
+        y_true: tf.Tensor,
+        y_pred: tf.Tensor
+    ) -> tf.Tensor:
         ce_loss = self.ce_loss(y_true, y_pred)
         dice_loss = self.dice_loss(y_true, y_pred)
         
         return self.ce_weight * ce_loss + self.dice_weight * dice_loss
     
-    def get_config(self):
+    def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
         config.update({
             'ce_weight': self.ce_weight,
@@ -198,9 +295,15 @@ class CombinedSegmentationLoss(tf.keras.losses.Loss):
 class MultiTaskLoss(tf.keras.losses.Loss):
     """Multi-task loss for joint detection and segmentation"""
     
-    def __init__(self, detection_weight=1.0, segmentation_weight=1.0,
-                 bbox_loss='smooth_l1', cls_loss='focal', seg_loss='combined',
-                 reduction=tf.keras.losses.Reduction.AUTO, name='multitask_loss'):
+    def __init__(self,
+        detection_weight: float = 1.0,
+        segmentation_weight: float = 1.0,
+        bbox_loss: str = 'smooth_l1',
+        cls_loss: str = 'focal',
+        seg_loss: str = 'combined',
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'multitask_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
         self.detection_weight = detection_weight
         self.segmentation_weight = segmentation_weight
@@ -225,7 +328,10 @@ class MultiTaskLoss(tf.keras.losses.Loss):
         else:
             self.seg_loss = tf.keras.losses.CategoricalCrossentropy()
     
-    def call(self, y_true, y_pred):
+    def call(self,
+        y_true: Dict[str, tf.Tensor],
+        y_pred: Dict[str, tf.Tensor]
+    ) -> tf.Tensor:
         """
         y_true: dict with keys 'bbox', 'class', 'mask'
         y_pred: dict with keys 'bbox', 'class', 'mask'
@@ -244,7 +350,7 @@ class MultiTaskLoss(tf.keras.losses.Loss):
         
         return total_loss
     
-    def get_config(self):
+    def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
         config.update({
             'detection_weight': self.detection_weight,
@@ -256,11 +362,35 @@ class MultiTaskLoss(tf.keras.losses.Loss):
 class IoULoss(tf.keras.losses.Loss):
     """IoU loss for bounding box regression"""
     
-    def __init__(self, reduction=tf.keras.losses.Reduction.AUTO, name='iou_loss'):
+    def __init__(self,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'iou_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
+
+        if tfa is not None:
+            self.iou_loss = tfa.losses.GIoULoss(
+                mode='iou',
+                reduction=reduction,
+                name=name
+            )
+        elif keras_cv is not None:
+            self.iou_loss = keras_cv.losses.GIoULoss(
+                mode='iou',
+                reduction=reduction,
+                name=name
+            )
+        else:
+            self.iou_loss = None
         
-    def call(self, y_true, y_pred):
+    def call(self,
+        y_true: tf.Tensor,
+        y_pred: tf.Tensor
+    ) -> tf.Tensor:
         """Calculate IoU loss between predicted and true bounding boxes"""
+        if self.iou_loss is not None:
+            return self.iou_loss(y_true, y_pred)
+        
         # Calculate intersection
         x1_max = tf.maximum(y_true[..., 0], y_pred[..., 0])
         y1_max = tf.maximum(y_true[..., 1], y_pred[..., 1])
@@ -281,13 +411,22 @@ class IoULoss(tf.keras.losses.Loss):
         return 1.0 - iou
 
 class DetectionLoss(tf.keras.losses.Loss):
-    def __init__(self, bbox_loss_weight=1.0, cls_loss_weight=1.0, iou_loss_weight=1.0, reduction=tf.keras.losses.Reduction.AUTO, name='detection_loss'):
+    def __init__(self,
+        bbox_loss_weight: float = 1.0,
+        cls_loss_weight: float = 1.0,
+        iou_loss_weight: float = 1.0,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'detection_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
         self.bbox_loss_weight = bbox_loss_weight
         self.cls_loss_weight = cls_loss_weight
         self.iou_loss_weight = iou_loss_weight
         
-    def call(self, y_true, y_pred):
+    def call(self,
+        y_true: Dict[str, tf.Tensor],
+        y_pred: Dict[str, tf.Tensor]
+    ) -> tf.Tensor:
         bbox_loss = tf.keras.losses.MeanSquaredError()(y_true['bbox'], y_pred['bbox'])
         cls_loss = tf.keras.losses.CategoricalCrossentropy()(y_true['class'], y_pred['class'])
         iou_loss = IoULoss()(y_true['bbox'], y_pred['bbox'])
@@ -296,22 +435,31 @@ class DetectionLoss(tf.keras.losses.Loss):
 
 
 class SegmentationLoss(tf.keras.losses.Loss):
-    def __init__(self, ce_weight=1.0, dice_weight=1.0, focal_weight=0.0, reduction=tf.keras.losses.Reduction.AUTO, name='segmentation_loss'):
+    def __init__(self,
+        ce_weight: float = 1.0,
+        dice_weight: float = 1.0,
+        focal_weight: float = 0.0,
+        reduction: tf.keras.losses.Reduction = tf.keras.losses.Reduction.AUTO,
+        name: str = 'segmentation_loss'
+    ):
         super().__init__(reduction=reduction, name=name)
         self.ce_weight = ce_weight
         self.dice_weight = dice_weight
         self.focal_weight = focal_weight
         
-    def call(self, y_true, y_pred):
+    def call(self,
+        y_true: tf.Tensor,
+        y_pred: tf.Tensor
+    ) -> tf.Tensor:
         ce_loss = tf.keras.losses.CategoricalCrossentropy()(y_true, y_pred)
         dice_loss = DiceLoss()(y_true, y_pred)
         focal_loss = FocalLoss()(y_true, y_pred)
         
         return self.ce_weight * ce_loss + self.dice_weight * dice_loss + self.focal_weight * focal_loss
 
-def get_loss_function(loss_config):
+def get_loss_function(loss_config: Dict[str, Any]) -> tf.keras.losses.Loss:
     """Factory function to get loss function based on configuration"""
-    loss_type = loss_config.get('type', 'mse')
+    loss_type = loss_config.get('type', 'mse').lower()
     
     if loss_type == 'smooth_l1':
         return SmoothL1Loss(beta=loss_config.get('beta', 1.0))
@@ -334,6 +482,12 @@ def get_loss_function(loss_config):
             ce_weight=loss_config.get('ce_weight', 0.5),
             dice_weight=loss_config.get('dice_weight', 0.5)
         )
+    elif loss_type == 'detection':
+        return DetectionLoss(
+            bbox_loss_weight=loss_config.get('bbox_loss_weight', 1.0),
+            cls_loss_weight=loss_config.get('cls_loss_weight', 1.0),
+            iou_loss_weight=loss_config.get('iou_loss_weight', 1.0)
+        )
     elif loss_type == 'multitask':
         return MultiTaskLoss(
             detection_weight=loss_config.get('detection_weight', 1.0),
@@ -349,22 +503,3 @@ def get_loss_function(loss_config):
         return tf.keras.losses.MeanSquaredError()
     else:
         raise ValueError(f"Unknown loss type: {loss_type}")
-
-
-# Loss weights for different tasks
-DETECTION_LOSS_WEIGHTS = {
-    'bbox_regression': 1.0,
-    'classification': 1.0,
-    'objectness': 1.0
-}
-
-SEGMENTATION_LOSS_WEIGHTS = {
-    'pixel_classification': 1.0,
-    'boundary_loss': 0.5
-}
-
-MULTITASK_LOSS_WEIGHTS = {
-    'detection': 1.0,
-    'segmentation': 1.0,
-    'shared_features': 0.1
-}
