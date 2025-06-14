@@ -1,260 +1,370 @@
+"""
+Custom loss functions for object detection and semantic segmentation
+"""
 import tensorflow as tf
-from tensorflow import keras
 import numpy as np
 
-class SmoothL1Loss(keras.losses.Loss):
+
+class SmoothL1Loss(tf.keras.losses.Loss):
     """Smooth L1 loss for bounding box regression"""
     
-    def __init__(self, beta=1.0, name='smooth_l1_loss'):
-        super().__init__(name=name)
+    def __init__(self, beta=1.0, reduction=tf.keras.losses.Reduction.AUTO, name='smooth_l1_loss'):
+        super().__init__(reduction=reduction, name=name)
         self.beta = beta
-    
+        
     def call(self, y_true, y_pred):
-        """
-        Compute Smooth L1 loss
-        
-        Args:
-            y_true: Ground truth bounding boxes [batch_size, 4]
-            y_pred: Predicted bounding boxes [batch_size, 4]
-        """
         diff = tf.abs(y_true - y_pred)
-        
-        # Smooth L1 loss
         loss = tf.where(
             diff < self.beta,
             0.5 * diff ** 2 / self.beta,
             diff - 0.5 * self.beta
         )
-        
-        return tf.reduce_mean(loss)
+        return tf.reduce_mean(loss, axis=-1)
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({'beta': self.beta})
+        return config
 
-class GIoULoss(keras.losses.Loss):
+
+class GIoULoss(tf.keras.losses.Loss):
     """Generalized IoU loss for bounding box regression"""
     
-    def __init__(self, name='giou_loss'):
-        super().__init__(name=name)
-    
+    def __init__(self, reduction=tf.keras.losses.Reduction.AUTO, name='giou_loss'):
+        super().__init__(reduction=reduction, name=name)
+        
     def call(self, y_true, y_pred):
         """
-        Compute Generalized IoU loss
-        
-        Args:
-            y_true: Ground truth bounding boxes [batch_size, 4] (y_min, x_min, y_max, x_max)
-            y_pred: Predicted bounding boxes [batch_size, 4] (y_min, x_min, y_max, x_max)
+        y_true, y_pred: [batch_size, 4] in format [x1, y1, x2, y2]
         """
-        # Extract coordinates
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred, tf.float32)
-        
-        y1_true, x1_true, y2_true, x2_true = tf.split(y_true, 4, axis=-1)
-        y1_pred, x1_pred, y2_pred, x2_pred = tf.split(y_pred, 4, axis=-1)
-        
         # Calculate intersection
-        x1_inter = tf.maximum(x1_true, x1_pred)
-        y1_inter = tf.maximum(y1_true, y1_pred)
-        x2_inter = tf.minimum(x2_true, x2_pred)
-        y2_inter = tf.minimum(y2_true, y2_pred)
+        x1_max = tf.maximum(y_true[..., 0], y_pred[..., 0])
+        y1_max = tf.maximum(y_true[..., 1], y_pred[..., 1])
+        x2_min = tf.minimum(y_true[..., 2], y_pred[..., 2])
+        y2_min = tf.minimum(y_true[..., 3], y_pred[..., 3])
         
-        inter_area = tf.maximum(0.0, x2_inter - x1_inter) * tf.maximum(0.0, y2_inter - y1_inter)
+        intersection_area = tf.maximum(0.0, x2_min - x1_max) * tf.maximum(0.0, y2_min - y1_max)
         
-        # Calculate union
-        true_area = (x2_true - x1_true) * (y2_true - y1_true)
-        pred_area = (x2_pred - x1_pred) * (y2_pred - y1_pred)
-        union_area = true_area + pred_area - inter_area
+        # Calculate areas
+        true_area = (y_true[..., 2] - y_true[..., 0]) * (y_true[..., 3] - y_true[..., 1])
+        pred_area = (y_pred[..., 2] - y_pred[..., 0]) * (y_pred[..., 3] - y_pred[..., 1])
+        union_area = true_area + pred_area - intersection_area
         
         # Calculate IoU
-        iou = inter_area / (union_area + 1e-8)
+        iou = intersection_area / (union_area + 1e-8)
         
         # Calculate enclosing box
-        x1_enclosing = tf.minimum(x1_true, x1_pred)
-        y1_enclosing = tf.minimum(y1_true, y1_pred)
-        x2_enclosing = tf.maximum(x2_true, x2_pred)
-        y2_enclosing = tf.maximum(y2_true, y2_pred)
+        x1_min = tf.minimum(y_true[..., 0], y_pred[..., 0])
+        y1_min = tf.minimum(y_true[..., 1], y_pred[..., 1])
+        x2_max = tf.maximum(y_true[..., 2], y_pred[..., 2])
+        y2_max = tf.maximum(y_true[..., 3], y_pred[..., 3])
         
-        enclosing_area = (x2_enclosing - x1_enclosing) * (y2_enclosing - y1_enclosing)
+        enclosing_area = (x2_max - x1_min) * (y2_max - y1_min)
         
         # Calculate GIoU
         giou = iou - (enclosing_area - union_area) / (enclosing_area + 1e-8)
         
-        # GIoU loss
-        loss = 1.0 - giou
-        
-        return tf.reduce_mean(loss)
+        # Return loss (1 - GIoU)
+        return 1.0 - giou
 
-class DiceLoss(keras.losses.Loss):
-    """Dice loss for segmentation"""
-    
-    def __init__(self, smooth=1e-6, name='dice_loss'):
-        super().__init__(name=name)
-        self.smooth = smooth
-    
-    def call(self, y_true, y_pred):
-        """
-        Compute Dice loss
-        
-        Args:
-            y_true: Ground truth masks [batch_size, height, width, num_classes]
-            y_pred: Predicted masks [batch_size, height, width, num_classes]
-        """
-        # Flatten the tensors
-        y_true_flat = tf.reshape(y_true, [-1])
-        y_pred_flat = tf.reshape(y_pred, [-1])
-        
-        # Calculate Dice coefficient
-        intersection = tf.reduce_sum(y_true_flat * y_pred_flat)
-        union = tf.reduce_sum(y_true_flat) + tf.reduce_sum(y_pred_flat)
-        
-        dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
-        
-        return 1.0 - dice
 
-class FocalLoss(keras.losses.Loss):
+class FocalLoss(tf.keras.losses.Loss):
     """Focal loss for addressing class imbalance"""
     
-    def __init__(self, alpha=0.25, gamma=2.0, name='focal_loss'):
-        super().__init__(name=name)
+    def __init__(self, alpha=0.25, gamma=2.0, from_logits=False, 
+                 reduction=tf.keras.losses.Reduction.AUTO, name='focal_loss'):
+        super().__init__(reduction=reduction, name=name)
         self.alpha = alpha
         self.gamma = gamma
-    
+        self.from_logits = from_logits
+        
     def call(self, y_true, y_pred):
-        """
-        Compute Focal loss
-        
-        Args:
-            y_true: Ground truth labels
-            y_pred: Predicted probabilities
-        """
-        # Clip predictions to prevent numerical instability
-        y_pred = tf.clip_by_value(y_pred, 1e-8, 1.0 - 1e-8)
-        
+        if self.from_logits:
+            y_pred = tf.nn.sigmoid(y_pred)
+            
         # Calculate cross entropy
-        ce_loss = -y_true * tf.math.log(y_pred)
+        ce_loss = tf.keras.losses.binary_crossentropy(y_true, y_pred, from_logits=False)
         
         # Calculate focal weight
-        p_t = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-        alpha_t = tf.where(tf.equal(y_true, 1), self.alpha, 1 - self.alpha)
+        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+        alpha_t = y_true * self.alpha + (1 - y_true) * (1 - self.alpha)
         focal_weight = alpha_t * tf.pow(1 - p_t, self.gamma)
         
         # Apply focal weight
         focal_loss = focal_weight * ce_loss
         
-        return tf.reduce_mean(focal_loss)
+        return focal_loss
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'alpha': self.alpha,
+            'gamma': self.gamma,
+            'from_logits': self.from_logits
+        })
+        return config
 
-class CombinedDetectionLoss(keras.losses.Loss):
-    """Combined loss for object detection (classification + localization)"""
+
+class DiceLoss(tf.keras.losses.Loss):
+    """Dice loss for semantic segmentation"""
     
-    def __init__(self, 
-                 bbox_loss_weight=1.0, 
-                 class_loss_weight=1.0,
-                 bbox_loss_type='smooth_l1',
-                 name='combined_detection_loss'):
-        super().__init__(name=name)
-        self.bbox_loss_weight = bbox_loss_weight
-        self.class_loss_weight = class_loss_weight
+    def __init__(self, smooth=1.0, reduction=tf.keras.losses.Reduction.AUTO, name='dice_loss'):
+        super().__init__(reduction=reduction, name=name)
+        self.smooth = smooth
         
-        # Initialize bbox loss
-        if bbox_loss_type == 'smooth_l1':
-            self.bbox_loss = SmoothL1Loss()
-        elif bbox_loss_type == 'giou':
-            self.bbox_loss = GIoULoss()
-        else:
-            raise ValueError(f"Unknown bbox loss type: {bbox_loss_type}")
-        
-        # Classification loss
-        self.class_loss = keras.losses.CategoricalCrossentropy()
-    
     def call(self, y_true, y_pred):
-        """
-        Compute combined detection loss
+        # Flatten the tensors
+        y_true_flat = tf.reshape(y_true, [-1])
+        y_pred_flat = tf.reshape(y_pred, [-1])
         
-        Args:
-            y_true: Dictionary with 'bbox' and 'class' ground truth
-            y_pred: Dictionary with 'bbox_output' and 'class_output' predictions
-        """
-        # Bbox loss
-        bbox_loss = self.bbox_loss(y_true['bbox'], y_pred['bbox_output'])
+        # Calculate intersection and union
+        intersection = tf.reduce_sum(y_true_flat * y_pred_flat)
+        union = tf.reduce_sum(y_true_flat) + tf.reduce_sum(y_pred_flat)
         
-        # Classification loss
-        class_loss = self.class_loss(y_true['class'], y_pred['class_output'])
+        # Calculate Dice coefficient
+        dice_coef = (2.0 * intersection + self.smooth) / (union + self.smooth)
         
-        # Combined loss
-        total_loss = (self.bbox_loss_weight * bbox_loss + 
-                     self.class_loss_weight * class_loss)
-        
-        return total_loss
-
-class CombinedSegmentationLoss(keras.losses.Loss):
-    """Combined loss for segmentation (cross-entropy + dice)"""
+        # Return Dice loss
+        return 1.0 - dice_coef
     
-    def __init__(self, 
-                 ce_weight=0.5, 
-                 dice_weight=0.5,
-                 name='combined_segmentation_loss'):
-        super().__init__(name=name)
+    def get_config(self):
+        config = super().get_config()
+        config.update({'smooth': self.smooth})
+        return config
+
+
+class TverskyLoss(tf.keras.losses.Loss):
+    """Tversky loss for handling class imbalance in segmentation"""
+    
+    def __init__(self, alpha=0.7, beta=0.3, smooth=1.0, 
+                 reduction=tf.keras.losses.Reduction.AUTO, name='tversky_loss'):
+        super().__init__(reduction=reduction, name=name)
+        self.alpha = alpha
+        self.beta = beta
+        self.smooth = smooth
+        
+    def call(self, y_true, y_pred):
+        # Flatten the tensors
+        y_true_flat = tf.reshape(y_true, [-1])
+        y_pred_flat = tf.reshape(y_pred, [-1])
+        
+        # Calculate True Positives, False Positives, False Negatives
+        tp = tf.reduce_sum(y_true_flat * y_pred_flat)
+        fp = tf.reduce_sum((1 - y_true_flat) * y_pred_flat)
+        fn = tf.reduce_sum(y_true_flat * (1 - y_pred_flat))
+        
+        # Calculate Tversky index
+        tversky_index = (tp + self.smooth) / (tp + self.alpha * fp + self.beta * fn + self.smooth)
+        
+        # Return Tversky loss
+        return 1.0 - tversky_index
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'alpha': self.alpha,
+            'beta': self.beta,
+            'smooth': self.smooth
+        })
+        return config
+
+
+class CombinedSegmentationLoss(tf.keras.losses.Loss):
+    """Combined loss for segmentation (CrossEntropy + Dice)"""
+    
+    def __init__(self, ce_weight=0.5, dice_weight=0.5, 
+                 reduction=tf.keras.losses.Reduction.AUTO, name='combined_seg_loss'):
+        super().__init__(reduction=reduction, name=name)
         self.ce_weight = ce_weight
         self.dice_weight = dice_weight
-        
-        # Initialize losses
-        self.ce_loss = keras.losses.CategoricalCrossentropy()
+        self.ce_loss = tf.keras.losses.CategoricalCrossentropy()
         self.dice_loss = DiceLoss()
-    
+        
     def call(self, y_true, y_pred):
-        """
-        Compute combined segmentation loss
-        
-        Args:
-            y_true: Ground truth segmentation masks
-            y_pred: Predicted segmentation masks
-        """
-        # Cross-entropy loss
         ce_loss = self.ce_loss(y_true, y_pred)
-        
-        # Dice loss
         dice_loss = self.dice_loss(y_true, y_pred)
         
-        # Combined loss
-        total_loss = self.ce_weight * ce_loss + self.dice_weight * dice_loss
-        
-        return total_loss
-
-class IoULoss(keras.losses.Loss):
-    """IoU loss for bounding box regression"""
+        return self.ce_weight * ce_loss + self.dice_weight * dice_loss
     
-    def __init__(self, name='iou_loss'):
-        super().__init__(name=name)
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'ce_weight': self.ce_weight,
+            'dice_weight': self.dice_weight
+        })
+        return config
+
+
+class MultiTaskLoss(tf.keras.losses.Loss):
+    """Multi-task loss for joint detection and segmentation"""
+    
+    def __init__(self, detection_weight=1.0, segmentation_weight=1.0,
+                 bbox_loss='smooth_l1', cls_loss='focal', seg_loss='combined',
+                 reduction=tf.keras.losses.Reduction.AUTO, name='multitask_loss'):
+        super().__init__(reduction=reduction, name=name)
+        self.detection_weight = detection_weight
+        self.segmentation_weight = segmentation_weight
+        
+        # Initialize losses
+        if bbox_loss == 'smooth_l1':
+            self.bbox_loss = SmoothL1Loss()
+        elif bbox_loss == 'giou':
+            self.bbox_loss = GIoULoss()
+        else:
+            self.bbox_loss = tf.keras.losses.MeanSquaredError()
+            
+        if cls_loss == 'focal':
+            self.cls_loss = FocalLoss()
+        else:
+            self.cls_loss = tf.keras.losses.CategoricalCrossentropy()
+            
+        if seg_loss == 'combined':
+            self.seg_loss = CombinedSegmentationLoss()
+        elif seg_loss == 'dice':
+            self.seg_loss = DiceLoss()
+        else:
+            self.seg_loss = tf.keras.losses.CategoricalCrossentropy()
     
     def call(self, y_true, y_pred):
         """
-        Compute IoU loss
-        
-        Args:
-            y_true: Ground truth bounding boxes [batch_size, 4]
-            y_pred: Predicted bounding boxes [batch_size, 4]
+        y_true: dict with keys 'bbox', 'class', 'mask'
+        y_pred: dict with keys 'bbox', 'class', 'mask'
         """
-        # Extract coordinates
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred, tf.float32)
+        # Detection losses
+        bbox_loss = self.bbox_loss(y_true['bbox'], y_pred['bbox'])
+        cls_loss = self.cls_loss(y_true['class'], y_pred['class'])
+        detection_loss = bbox_loss + cls_loss
         
-        y1_true, x1_true, y2_true, x2_true = tf.split(y_true, 4, axis=-1)
-        y1_pred, x1_pred, y2_pred, x2_pred = tf.split(y_pred, 4, axis=-1)
+        # Segmentation loss
+        seg_loss = self.seg_loss(y_true['mask'], y_pred['mask'])
         
+        # Combined loss
+        total_loss = (self.detection_weight * detection_loss + 
+                     self.segmentation_weight * seg_loss)
+        
+        return total_loss
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'detection_weight': self.detection_weight,
+            'segmentation_weight': self.segmentation_weight
+        })
+        return config
+
+
+class IoULoss(tf.keras.losses.Loss):
+    """IoU loss for bounding box regression"""
+    
+    def __init__(self, reduction=tf.keras.losses.Reduction.AUTO, name='iou_loss'):
+        super().__init__(reduction=reduction, name=name)
+        
+    def call(self, y_true, y_pred):
+        """Calculate IoU loss between predicted and true bounding boxes"""
         # Calculate intersection
-        x1_inter = tf.maximum(x1_true, x1_pred)
-        y1_inter = tf.maximum(y1_true, y1_pred)
-        x2_inter = tf.minimum(x2_true, x2_pred)
-        y2_inter = tf.minimum(y2_true, y2_pred)
+        x1_max = tf.maximum(y_true[..., 0], y_pred[..., 0])
+        y1_max = tf.maximum(y_true[..., 1], y_pred[..., 1])
+        x2_min = tf.minimum(y_true[..., 2], y_pred[..., 2])
+        y2_min = tf.minimum(y_true[..., 3], y_pred[..., 3])
         
-        inter_area = tf.maximum(0.0, x2_inter - x1_inter) * tf.maximum(0.0, y2_inter - y1_inter)
+        intersection_area = tf.maximum(0.0, x2_min - x1_max) * tf.maximum(0.0, y2_min - y1_max)
         
-        # Calculate union
-        true_area = (x2_true - x1_true) * (y2_true - y1_true)
-        pred_area = (x2_pred - x1_pred) * (y2_pred - y1_pred)
-        union_area = true_area + pred_area - inter_area
+        # Calculate areas
+        true_area = (y_true[..., 2] - y_true[..., 0]) * (y_true[..., 3] - y_true[..., 1])
+        pred_area = (y_pred[..., 2] - y_pred[..., 0]) * (y_pred[..., 3] - y_pred[..., 1])
+        union_area = true_area + pred_area - intersection_area
         
         # Calculate IoU
-        iou = inter_area / (union_area + 1e-8)
+        iou = intersection_area / (union_area + 1e-8)
         
-        # IoU loss
-        loss = 1.0 - iou
+        # Return loss (1 - IoU)
+        return 1.0 - iou
+
+class DetectionLoss(tf.keras.losses.Loss):
+    def __init__(self, bbox_loss_weight=1.0, cls_loss_weight=1.0, iou_loss_weight=1.0, reduction=tf.keras.losses.Reduction.AUTO, name='detection_loss'):
+        super().__init__(reduction=reduction, name=name)
+        self.bbox_loss_weight = bbox_loss_weight
+        self.cls_loss_weight = cls_loss_weight
+        self.iou_loss_weight = iou_loss_weight
         
-        return tf.reduce_mean(loss)
+    def call(self, y_true, y_pred):
+        bbox_loss = tf.keras.losses.MeanSquaredError()(y_true['bbox'], y_pred['bbox'])
+        cls_loss = tf.keras.losses.CategoricalCrossentropy()(y_true['class'], y_pred['class'])
+        iou_loss = IoULoss()(y_true['bbox'], y_pred['bbox'])
+        
+        return self.bbox_loss_weight * bbox_loss + self.cls_loss_weight * cls_loss + self.iou_loss_weight * iou_loss
+
+
+class SegmentationLoss(tf.keras.losses.Loss):
+    def __init__(self, ce_weight=1.0, dice_weight=1.0, focal_weight=0.0, reduction=tf.keras.losses.Reduction.AUTO, name='segmentation_loss'):
+        super().__init__(reduction=reduction, name=name)
+        self.ce_weight = ce_weight
+        self.dice_weight = dice_weight
+        self.focal_weight = focal_weight
+        
+    def call(self, y_true, y_pred):
+        ce_loss = tf.keras.losses.CategoricalCrossentropy()(y_true, y_pred)
+        dice_loss = DiceLoss()(y_true, y_pred)
+        focal_loss = FocalLoss()(y_true, y_pred)
+        
+        return self.ce_weight * ce_loss + self.dice_weight * dice_loss + self.focal_weight * focal_loss
+
+def get_loss_function(loss_config):
+    """Factory function to get loss function based on configuration"""
+    loss_type = loss_config.get('type', 'mse')
+    
+    if loss_type == 'smooth_l1':
+        return SmoothL1Loss(beta=loss_config.get('beta', 1.0))
+    elif loss_type == 'giou':
+        return GIoULoss()
+    elif loss_type == 'focal':
+        return FocalLoss(
+            alpha=loss_config.get('alpha', 0.25),
+            gamma=loss_config.get('gamma', 2.0)
+        )
+    elif loss_type == 'dice':
+        return DiceLoss(smooth=loss_config.get('smooth', 1.0))
+    elif loss_type == 'tversky':
+        return TverskyLoss(
+            alpha=loss_config.get('alpha', 0.7),
+            beta=loss_config.get('beta', 0.3)
+        )
+    elif loss_type == 'combined_seg':
+        return CombinedSegmentationLoss(
+            ce_weight=loss_config.get('ce_weight', 0.5),
+            dice_weight=loss_config.get('dice_weight', 0.5)
+        )
+    elif loss_type == 'multitask':
+        return MultiTaskLoss(
+            detection_weight=loss_config.get('detection_weight', 1.0),
+            segmentation_weight=loss_config.get('segmentation_weight', 1.0)
+        )
+    elif loss_type == 'iou':
+        return IoULoss()
+    elif loss_type == 'categorical_crossentropy':
+        return tf.keras.losses.CategoricalCrossentropy()
+    elif loss_type == 'binary_crossentropy':
+        return tf.keras.losses.BinaryCrossentropy()
+    elif loss_type == 'mse':
+        return tf.keras.losses.MeanSquaredError()
+    else:
+        raise ValueError(f"Unknown loss type: {loss_type}")
+
+
+# Loss weights for different tasks
+DETECTION_LOSS_WEIGHTS = {
+    'bbox_regression': 1.0,
+    'classification': 1.0,
+    'objectness': 1.0
+}
+
+SEGMENTATION_LOSS_WEIGHTS = {
+    'pixel_classification': 1.0,
+    'boundary_loss': 0.5
+}
+
+MULTITASK_LOSS_WEIGHTS = {
+    'detection': 1.0,
+    'segmentation': 1.0,
+    'shared_features': 0.1
+}
