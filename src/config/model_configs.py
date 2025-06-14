@@ -1,6 +1,11 @@
 # config/model_configs.py
 from dataclasses import dataclass
-from typing import Dict, Any
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+# Third-party
+import yaml
+from src.config.config import Config
 
 @dataclass
 class ModelConfigs:
@@ -22,158 +27,71 @@ class ModelConfigs:
     OPTIMIZER_CONFIGS: Dict[str, Dict[str, Any]] = None
     
     
-    def __post_init__(self):
-        if self.DETECTION_MODELS is None:
-            self.DETECTION_MODELS = {
-                "resnet50": {
-                    "backbone": "ResNet50",
-                    "input_shape": (224, 224, 3),
-                    "pretrained_weights": "imagenet",
-                    "freeze_backbone": False,
-                    "detection_head_units": [256, 128, 64],
-                    "bbox_output_units": 4,  # x1, y1, x2, y2
-                    "class_output_units": 37,
-                },
-                "mobilenetv2": {
-                    "backbone": "MobileNetV2",
-                    "input_shape": (224, 224, 3),
-                    "pretrained_weights": "imagenet",
-                    "freeze_backbone": False,
-                    "detection_head_units": [256, 128, 64],
-                    "bbox_output_units": 4,
-                    "class_output_units": 37,
-                },
-                "efficientnetb0": {
-                    "backbone": "EfficientNetB0",
-                    "input_shape": (224, 224, 3),
-                    "pretrained_weights": "imagenet",
-                    "freeze_backbone": False,
-                    "detection_head_units": [256, 128, 64],
-                    "bbox_output_units": 4,
-                    "class_output_units": 37,
-                }
-            }
-    
-        # Segmentation model configurations
-        if self.SEGMENTATION_MODELS is None:
-            self.SEGMENTATION_MODELS = {
-                    "simple_unet": {
-                        "backbone": "ResNet50",
-                        "input_shape": (224, 224, 3),
-                        "pretrained_weights": "imagenet",
-                        "freeze_backbone": False,
-                        "encoder_filters": [64, 128, 256, 512, 1024],
-                        "decoder_filters": [512, 256, 128, 64, 32],
-                        "num_classes": 3,  # background, foreground, unknown
-                    },
-                    "unet_resnet50": {
-                        "backbone": "ResNet50",
-                        "input_shape": (224, 224, 3),
-                        "pretrained_weights": "imagenet",
-                        "freeze_backbone": False,
-                        "decoder_filters": [512, 256, 128, 64, 32],
-                        "num_classes": 3,  # background, foreground, unknown
-                    },
-                    "unet_mobilenetv2": {
-                        "backbone": "MobileNetV2",
-                        "input_shape": (224, 224, 3),
-                        "pretrained_weights": "imagenet",
-                        "freeze_backbone": False,
-                        "decoder_filters": [512, 256, 128, 64, 32],
-                        "num_classes": 3,
-                    },
-                    "deeplabv3plus": {
-                        "backbone": "ResNet50",
-                        "input_shape": (224, 224, 3),
-                        "pretrained_weights": "imagenet",
-                        "freeze_backbone": False,
-                        "decoder_filters": [512, 256, 128, 64, 32],
-                        "num_classes": 3,
-                    }
-                }
-        
-        # Multitask model configuration
-        if self.MULTITASK_MODELS is None:
-            self.MULTITASK_MODELS = {
-                "resnet50": {
-                    "input_shape": (224, 224, 3),
-                    "feature_dim": 2048,
-                    "pretrained_weights": "imagenet",
-                    "freeze_backbone": False,
-                    "shared_features": 512,
-                    "detection_head_units": [512, 256, 128, 64],
-                    "detection_head_dropout": 0.5,
-                    "classification_head_units": [512, 256, 128, 64],
-                    "classification_head_dropout": 0.5,
-                    "segmentation_head_units": [512, 256, 128, 64],
-                    "segmentation_head_dropout": 0.3,
-                    "bbox_output_units": 4,
-                    "class_output_units": 37,
-                    "seg_output_units": 3,
-                    "loss_weights": {
-                        "detection": 1.0,
-                        "segmentation": 1.0,
-                        "bbox": 1.0,
-                        "classification": 1.0
-                        }
-                },
-                "efficientnetb0": {
-                    "input_shape": (224, 224, 3),
-                    "feature_dim": 1280,
-                    "pretrained_weights": "imagenet",
-                    "freeze_backbone": False,
-                    "shared_features": 512,
-                    "detection_head_units": [512, 256, 128, 64],
-                    "detection_head_dropout": 0.5,
-                    "classification_head_units": [512, 256, 128, 64],
-                    "classification_head_dropout": 0.5,
-                    "segmentation_head_units": [512, 256, 128, 64],
-                    "segmentation_head_dropout": 0.3,
-                    "bbox_output_units": 4,
-                    "class_output_units": 37,
-                    "seg_output_units": 3,
-                    "loss_weights": {
-                        "detection": 1.0,
-                        "segmentation": 1.0,
-                        "bbox": 1.0,
-                        "classification": 1.0
-                    }
-                }
-            }
+    # ------------------------------------------------------------------
+    # Helper methods
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_yaml_config() -> Optional[Dict[str, Any]]:
+        yaml_path = Config.CONFIG_DIR / "model_config.yaml"
+        if not yaml_path.exists():
+            return None
 
+        try:
+            with yaml_path.open("r", encoding="utf-8") as fp:
+                return yaml.safe_load(fp)
+        except Exception as exc:  # pragma: no cover
+            # Corrupted YAML etc. We fail silently and fall back to defaults.
+            print(f"[ModelConfigs] Failed to read YAML config at '{yaml_path}': {exc}")
+            return None
+
+    def __post_init__(self):
+        # Try to load YAML configuration first. If not available, we fall back
+        # to the hard-coded defaults defined below.
+        yaml_cfg = self._load_yaml_config()
+
+        # ------------------------------------------------------------------
+        # Detection models configuration
+        # ------------------------------------------------------------------
+
+        if yaml_cfg and isinstance(yaml_cfg.get("detection_models"), dict):
+            # Entire sub-dict is stored directly so it preserves any defaults
+            # defined by the user.
+            self.DETECTION_MODELS = yaml_cfg["detection_models"]
+        else:
+            raise ValueError("Detection models configuration not found in YAML file")
         
+        if yaml_cfg and isinstance(yaml_cfg.get("segmentation_models"), dict):
+            self.SEGMENTATION_MODELS = yaml_cfg["segmentation_models"]
+        else:
+            raise ValueError("Segmentation models configuration not found in YAML file")
         
-        # Loss function configurations
-        if self.LOSS_CONFIGS is None:
-            self.LOSS_CONFIGS = {
-                "detection": {
-                    "bbox_loss": "smooth_l1",
-                    "classification_loss": "sparse_categorical_crossentropy",
-                    "bbox_loss_weight": 1.0,
-                    "classification_loss_weight": 1.0,
-                },
-                "segmentation": {
-                    "loss": "sparse_categorical_crossentropy",
-                    "metrics": ["accuracy", "iou"],
-                },
-                "multitask": {
-                    "detection_weight": 1.0,
-                    "segmentation_weight": 1.0,
-                }
-            }
+        if yaml_cfg and isinstance(yaml_cfg.get("multitask_models"), dict):
+            self.MULTITASK_MODELS = yaml_cfg["multitask_models"]
+        else:
+            raise ValueError("Multitask models configuration not found in YAML file")
         
-        # Optimizer configurations
-        if self.OPTIMIZER_CONFIGS is None:
-            self.OPTIMIZER_CONFIGS = {
-                "adam": {
-                    "learning_rate": 1e-4,
-                    "beta_1": 0.9,
-                    "beta_2": 0.999,
-                    "epsilon": 1e-7,
-                },
-                "sgd": {
-                    "learning_rate": 1e-3,
-                    "momentum": 0.9,
-                    "nesterov": True,
-                }
-            }
+        if yaml_cfg and isinstance(yaml_cfg.get("loss_configs"), dict):
+            self.LOSS_CONFIGS = yaml_cfg["loss_configs"]
+        else:
+            raise ValueError("Loss functions configuration not found in YAML file")
+        
+        if yaml_cfg and isinstance(yaml_cfg.get("optimizer_configs"), dict):
+            self.OPTIMIZER_CONFIGS = yaml_cfg["optimizer_configs"]
+        else:
+            raise ValueError("Optimizer configuration not found in YAML file")
+        
+        if yaml_cfg and isinstance(yaml_cfg.get("metrics_configs"), dict):
+            self.METRICS_CONFIGS = yaml_cfg["metrics_configs"]
+        else:
+            raise ValueError("Metrics configuration not found in YAML file")
+        
+        if yaml_cfg and isinstance(yaml_cfg.get("callbacks_configs"), dict):
+            self.CALLBACKS_CONFIGS = yaml_cfg["callbacks_configs"]
+        else:
+            raise ValueError("Callbacks configuration not found in YAML file")
+        
+        if yaml_cfg and isinstance(yaml_cfg.get("tensorboard_configs"), dict):
+            self.TENSORBOARD_CONFIGS = yaml_cfg["tensorboard_configs"]
+        else:
+            raise ValueError("Tensorboard configuration not found in YAML file")
+        

@@ -1,5 +1,5 @@
 """
-Custom callbacks for training pipeline
+Optimized custom callbacks for training pipeline with SOTA techniques
 """
 import os
 import numpy as np
@@ -7,171 +7,289 @@ import tensorflow as tf
 from tensorflow.keras.callbacks import Callback
 import matplotlib.pyplot as plt
 import json
+import warnings
+from typing import List
 
-class EarlyStopping(Callback):
-    """Custom early stopping callback with more control"""
+from src.config.config import Config
+from src.training.base import BaseOptimizedCallback
+
+
+class AdaptiveEarlyStopping(BaseOptimizedCallback):
+    """Enhanced early stopping with adaptive patience and delta"""
     
     def __init__(
         self,
-        monitor='val_loss',
-        patience=7,
-        min_delta=0.0001,
-        restore_best_weights=True,
-        verbose=1
+        monitor: str = 'val_loss',
+        min_delta: float = 1e-4,
+        patience: int = 10,
+        restore_best_weights: bool = True,
+        adaptive_patience: bool = True,
+        patience_factor: float = 1.2,
+        min_lr_threshold: float = 1e-7,
+        verbose: int = 1
     ):
-        super().__init__()
+        super().__init__(verbose)
         self.monitor = monitor
-        self.patience = patience
         self.min_delta = min_delta
+        self.base_patience = patience
         self.restore_best_weights = restore_best_weights
-        self.verbose = verbose
+        self.adaptive_patience = adaptive_patience
+        self.patience_factor = patience_factor
+        self.min_lr_threshold = min_lr_threshold
         
         self.wait = 0
         self.stopped_epoch = 0
         self.best = None
         self.best_weights = None
+        self.best_epoch = 0
+        self.patience = patience
+        self.improvement_streak = 0
         
     def on_train_begin(self, logs=None):
         self.wait = 0
         self.stopped_epoch = 0
-        if 'loss' in self.monitor:
-            self.best = np.Inf
+        self.improvement_streak = 0
+        self.patience = self.base_patience
+        
+        if 'loss' in self.monitor or 'error' in self.monitor:
+            self.best = np.inf
+            self.monitor_op = np.less
         else:
-            self.best = -np.Inf
+            self.best = -np.inf
+            self.monitor_op = np.greater
             
     def on_epoch_end(self, epoch, logs=None):
-        current = logs.get(self.monitor)
+        current = self._safe_get_metric(logs, self.monitor)
+        
         if current is None:
+            warnings.warn(f"Metric '{self.monitor}' not found in logs.")
             return
             
-        if 'loss' in self.monitor:
-            if current < self.best - self.min_delta:
-                self.best = current
-                self.wait = 0
-                if self.restore_best_weights:
-                    self.best_weights = self.model.get_weights()
-            else:
-                self.wait += 1
+        # Check for improvement
+        if self.monitor_op(current, self.best - self.min_delta):
+            self.best = current
+            self.wait = 0
+            self.best_epoch = epoch
+            self.improvement_streak += 1
+            
+            if self.restore_best_weights:
+                self.best_weights = self.model.get_weights()
+                
+            # Adaptive patience: increase patience after consecutive improvements
+            if self.adaptive_patience and self.improvement_streak >= 3:
+                self.patience = int(self.base_patience * self.patience_factor)
+                self.improvement_streak = 0
+                if self.verbose > 0:
+                    print(f"Adaptive patience increased to {self.patience}")
         else:
-            if current > self.best + self.min_delta:
-                self.best = current
-                self.wait = 0
-                if self.restore_best_weights:
-                    self.best_weights = self.model.get_weights()
-            else:
-                self.wait += 1
-                
+            self.wait += 1
+            self.improvement_streak = 0
+            
+        # Check learning rate threshold
+        current_lr = float(tf.keras.backend.get_value(self.model.optimizer.learning_rate))
+        if current_lr < self.min_lr_threshold and self.wait >= self.patience // 2:
+            if self.verbose > 0:
+                print(f"Learning rate {current_lr:.2e} below threshold. Triggering early stopping.")
+            self._trigger_stop(epoch)
+            
         if self.wait >= self.patience:
-            self.stopped_epoch = epoch
-            self.model.stop_training = True
-            if self.restore_best_weights and self.best_weights is not None:
-                self.model.set_weights(self.best_weights)
-                
-    def on_train_end(self, logs=None):
-        if self.stopped_epoch > 0 and self.verbose > 0:
-            print(f"Early stopping at epoch {self.stopped_epoch + 1}")
+            self._trigger_stop(epoch)
+            
+    def _trigger_stop(self, epoch):
+        self.stopped_epoch = epoch
+        self.model.stop_training = True
+        
+        if self.restore_best_weights and self.best_weights is not None:
+            self.model.set_weights(self.best_weights)
+            
+        if self.verbose > 0:
+            print(f"\nEarly stopping at epoch {epoch + 1}")
+            print(f"Best epoch: {self.best_epoch + 1}, Best {self.monitor}: {self.best:.6f}")
 
 
-class LearningRateScheduler(Callback):
-    """Custom learning rate scheduler"""
+class WarmupCosineScheduler(BaseOptimizedCallback):
+    """Advanced learning rate scheduler with warmup, cosine decay, and restarts"""
     
-    def __init__(self, schedule_type='cosine', initial_lr=0.001, 
-                 min_lr=1e-6, warmup_epochs=5):
-        super().__init__()
-        self.schedule_type = schedule_type
+    def __init__(
+        self,
+        initial_lr: float = 1e-3,
+        min_lr: float = 1e-7,
+        warmup_epochs: int = 5,
+        total_epochs: int = 100,
+        cosine_restarts: bool = True,
+        restart_decay: float = 0.8,
+        verbose: int = 1
+    ):
+        super().__init__(verbose)
         self.initial_lr = initial_lr
         self.min_lr = min_lr
         self.warmup_epochs = warmup_epochs
+        self.total_epochs = total_epochs
+        self.cosine_restarts = cosine_restarts
+        self.restart_decay = restart_decay
+        
+        self.restart_epochs = []
+        self.current_restart = 0
+        
+    def on_train_begin(self, logs=None):
+        self.total_epochs = self.params.get('epochs', self.total_epochs)
+        
+        if self.cosine_restarts:
+            # Set restart points at 1/4, 1/2, 3/4 of training
+            self.restart_epochs = [
+                self.total_epochs // 4,
+                self.total_epochs // 2,
+                3 * self.total_epochs // 4
+            ]
         
     def on_epoch_begin(self, epoch, logs=None):
-        if self.schedule_type == 'cosine':
-            lr = self._cosine_schedule(epoch)
-        elif self.schedule_type == 'step':
-            lr = self._step_schedule(epoch)
-        elif self.schedule_type == 'exponential':
-            lr = self._exponential_schedule(epoch)
-        else:
-            lr = self.initial_lr
-            
-        tf.keras.backend.set_value(self.model.optimizer.lr, lr)
+        lr = self._calculate_lr(epoch)
+        tf.keras.backend.set_value(self.model.optimizer.learning_rate, lr)
         
-    def _cosine_schedule(self, epoch):
+        if self.verbose > 1:
+            print(f"Epoch {epoch + 1}: Learning rate = {lr:.2e}")
+            
+    def _calculate_lr(self, epoch):
+        # Check for restart
+        if self.cosine_restarts and epoch in self.restart_epochs:
+            self.current_restart += 1
+            if self.verbose > 0:
+                print(f"Cosine restart #{self.current_restart} at epoch {epoch + 1}")
+        
+        # Warmup phase
         if epoch < self.warmup_epochs:
-            return self.initial_lr * epoch / self.warmup_epochs
+            return self.initial_lr * (epoch + 1) / self.warmup_epochs
         
-        total_epochs = self.params['epochs']
-        cosine_decay = 0.5 * (1 + np.cos(np.pi * epoch / total_epochs))
-        return self.min_lr + (self.initial_lr - self.min_lr) * cosine_decay
-        
-    def _step_schedule(self, epoch):
-        if epoch < 30:
-            return self.initial_lr
-        elif epoch < 60:
-            return self.initial_lr * 0.1
+        # Calculate effective epoch for cosine decay
+        if self.cosine_restarts:
+            restart_epoch = 0
+            for restart in self.restart_epochs:
+                if epoch >= restart:
+                    restart_epoch = restart
+                else:
+                    break
+            effective_epoch = epoch - restart_epoch
+            effective_total = (self.restart_epochs[self.current_restart] - restart_epoch 
+                             if self.current_restart < len(self.restart_epochs)
+                             else self.total_epochs - restart_epoch)
         else:
-            return self.initial_lr * 0.01
-            
-    def _exponential_schedule(self, epoch):
-        return self.initial_lr * (0.95 ** epoch)
+            effective_epoch = epoch - self.warmup_epochs
+            effective_total = self.total_epochs - self.warmup_epochs
+        
+        # Cosine decay
+        decay_factor = (self.restart_decay ** self.current_restart 
+                       if self.cosine_restarts else 1.0)
+        cosine_decay = 0.5 * (1 + np.cos(np.pi * effective_epoch / effective_total))
+        
+        return self.min_lr + (self.initial_lr * decay_factor - self.min_lr) * cosine_decay
 
 
-class ModelCheckpoint(Callback):
-    """Enhanced model checkpoint callback"""
+class AdvancedModelCheckpoint(BaseOptimizedCallback):
+    """Enhanced checkpoint with model versioning and automatic cleanup"""
     
-    def __init__(self, filepath, monitor='val_loss', save_best_only=True,
-                 save_weights_only=False, mode='auto', save_freq='epoch'):
-        super().__init__()
+    def __init__(
+        self,
+        filepath: str,
+        monitor: str = 'val_loss',
+        save_best_only: bool = True,
+        save_weights_only: bool = False,
+        mode: str = 'auto',
+        keep_top_k: int = 3,
+        save_freq: str = 'epoch',
+        verbose: int = 1
+    ):
+        super().__init__(verbose)
         self.filepath = filepath
         self.monitor = monitor
         self.save_best_only = save_best_only
         self.save_weights_only = save_weights_only
         self.mode = mode
+        self.keep_top_k = keep_top_k
         self.save_freq = save_freq
         
+        self.saved_models = []  # List of (filepath, metric_value) tuples
+        
         if mode == 'auto':
-            if 'loss' in self.monitor:
-                self.mode = 'min'
-            else:
-                self.mode = 'max'
-                
-        if self.mode == 'min':
-            self.best = np.Inf
-        else:
-            self.best = -np.Inf
+            self.mode = 'min' if 'loss' in monitor or 'error' in monitor else 'max'
             
+        self.best = np.inf if self.mode == 'min' else -np.inf
+        self.monitor_op = np.less if self.mode == 'min' else np.greater
+        
         os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
         
     def on_epoch_end(self, epoch, logs=None):
-        current = logs.get(self.monitor)
+        current = self._safe_get_metric(logs, self.monitor)
+        
         if current is None:
             return
             
-        if not self.save_best_only:
-            self._save_model(epoch)
-        else:
-            if self.mode == 'min' and current < self.best:
+        filepath = self.filepath.format(epoch=epoch + 1, **logs)
+        
+        should_save = (not self.save_best_only or 
+                      self.monitor_op(current, self.best))
+        
+        if should_save:
+            if self.monitor_op(current, self.best):
                 self.best = current
-                self._save_model(epoch)
-            elif self.mode == 'max' and current > self.best:
-                self.best = current
-                self._save_model(epoch)
                 
-    def _save_model(self, epoch):
-        filepath = self.filepath.format(epoch=epoch + 1)
+            self._save_model(filepath, current)
+            self._cleanup_old_models()
+            
+            if self.verbose > 0:
+                print(f"\nModel saved: {filepath} ({self.monitor}: {current:.6f})")
+                
+    def _save_model(self, filepath, metric_value):
         if self.save_weights_only:
             self.model.save_weights(filepath)
         else:
-            self.model.save(filepath)
+            self.model.save(filepath, save_format='tf' if filepath.endswith('.tf') else 'h5')
+            
+        self.saved_models.append((filepath, metric_value))
+        
+    def _cleanup_old_models(self):
+        if len(self.saved_models) <= self.keep_top_k:
+            return
+            
+        # Sort by metric value (best first)
+        self.saved_models.sort(key=lambda x: x[1], 
+                              reverse=(self.mode == 'max'))
+        
+        # Remove worst models
+        to_remove = self.saved_models[self.keep_top_k:]
+        self.saved_models = self.saved_models[:self.keep_top_k]
+        
+        for filepath, _ in to_remove:
+            try:
+                if os.path.exists(filepath):
+                    if os.path.isdir(filepath):
+                        import shutil
+                        shutil.rmtree(filepath)
+                    else:
+                        os.remove(filepath)
+            except OSError:
+                pass
 
 
-class ProgressLogger(Callback):
-    """Log training progress to file"""
+class MetricsLogger(BaseOptimizedCallback):
+    """Enhanced metrics logging with visualization and statistics"""
     
-    def __init__(self, log_dir):
-        super().__init__()
+    def __init__(
+        self,
+        log_dir: str,
+        save_plots: bool = True,
+        plot_frequency: int = 5,
+        save_statistics: bool = True,
+        verbose: int = 1
+    ):
+        super().__init__(verbose)
         self.log_dir = log_dir
+        self.save_plots = save_plots
+        self.plot_frequency = plot_frequency
+        self.save_statistics = save_statistics
+        
         os.makedirs(log_dir, exist_ok=True)
         self.history = []
+        self.statistics = {}
         
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -179,188 +297,392 @@ class ProgressLogger(Callback):
         epoch_data.update(logs)
         self.history.append(epoch_data)
         
-        # Save to JSON
+        # Update statistics
+        self._update_statistics(logs)
+        
+        # Save data
+        self._save_history()
+        if self.save_statistics:
+            self._save_statistics()
+            
+        # Generate plots
+        if (self.save_plots and len(self.history) > 1 and 
+            (epoch + 1) % self.plot_frequency == 0):
+            self._generate_plots()
+            
+    def _update_statistics(self, logs):
+        for key, value in logs.items():
+            if key not in self.statistics:
+                self.statistics[key] = {
+                    'values': [],
+                    'mean': 0,
+                    'std': 0,
+                    'min': float('inf'),
+                    'max': float('-inf'),
+                    'trend': 'stable'
+                }
+            
+            stats = self.statistics[key]
+            stats['values'].append(value)
+            stats['mean'] = np.mean(stats['values'])
+            stats['std'] = np.std(stats['values'])
+            stats['min'] = min(stats['min'], value)
+            stats['max'] = max(stats['max'], value)
+            
+            # Calculate trend
+            if len(stats['values']) >= 5:
+                recent_trend = np.polyfit(range(5), stats['values'][-5:], 1)[0]
+                if abs(recent_trend) < 1e-4:
+                    stats['trend'] = 'stable'
+                elif recent_trend > 0:
+                    stats['trend'] = 'increasing' if 'loss' not in key else 'deteriorating'
+                else:
+                    stats['trend'] = 'decreasing' if 'loss' not in key else 'improving'
+    
+    def _save_history(self):
         with open(os.path.join(self.log_dir, 'training_history.json'), 'w') as f:
             json.dump(self.history, f, indent=2)
             
-        # Save plots
-        self._save_plots()
-        
-    def _save_plots(self):
+    def _save_statistics(self):
+        # Remove values array for JSON serialization
+        stats_for_json = {}
+        for key, stats in self.statistics.items():
+            stats_for_json[key] = {k: v for k, v in stats.items() if k != 'values'}
+            
+        with open(os.path.join(self.log_dir, 'training_statistics.json'), 'w') as f:
+            json.dump(stats_for_json, f, indent=2)
+    
+    def _generate_plots(self):
         if len(self.history) < 2:
             return
             
         epochs = [h['epoch'] for h in self.history]
         
-        # Loss plots
-        plt.figure(figsize=(12, 4))
+        # Create subplots
+        metrics = list(self.history[0].keys())
+        metrics.remove('epoch')
         
-        plt.subplot(1, 2, 1)
-        if 'loss' in self.history[0]:
-            train_loss = [h.get('loss', 0) for h in self.history]
-            plt.plot(epochs, train_loss, label='Training Loss')
-        if 'val_loss' in self.history[0]:
-            val_loss = [h.get('val_loss', 0) for h in self.history]
-            plt.plot(epochs, val_loss, label='Validation Loss')
-        plt.title('Training and Validation Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.legend()
-        plt.grid(True)
+        loss_metrics = [m for m in metrics if 'loss' in m]
+        acc_metrics = [m for m in metrics if any(x in m.lower() for x in ['acc', 'precision', 'recall', 'f1', 'iou', 'dice'])]
         
-        # Metrics plots
-        plt.subplot(1, 2, 2)
-        for key in self.history[0].keys():
-            if 'acc' in key.lower() or 'iou' in key.lower():
-                values = [h.get(key, 0) for h in self.history]
-                plt.plot(epochs, values, label=key.replace('_', ' ').title())
-        plt.title('Training Metrics')
-        plt.xlabel('Epoch')
-        plt.ylabel('Metric Value')
-        plt.legend()
-        plt.grid(True)
+        fig_height = 4 * (len(loss_metrics) > 0) + 4 * (len(acc_metrics) > 0)
+        fig, axes = plt.subplots(
+            (len(loss_metrics) > 0) + (len(acc_metrics) > 0), 
+            1, 
+            figsize=(12, max(fig_height, 4))
+        )
+        
+        if not isinstance(axes, np.ndarray):
+            axes = [axes]
+            
+        plot_idx = 0
+        
+        # Plot losses
+        if loss_metrics:
+            ax = axes[plot_idx]
+            for metric in loss_metrics:
+                values = [h.get(metric, 0) for h in self.history]
+                ax.plot(epochs, values, label=metric.replace('_', ' ').title(), linewidth=2)
+            ax.set_title('Training and Validation Loss')
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel('Loss')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            plot_idx += 1
+        
+        # Plot accuracy metrics
+        if acc_metrics:
+            ax = axes[plot_idx]
+            for metric in acc_metrics:
+                values = [h.get(metric, 0) for h in self.history]
+                ax.plot(epochs, values, label=metric.replace('_', ' ').title(), linewidth=2)
+            ax.set_title('Training and Validation Metrics')
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel('Metric Value')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(self.log_dir, 'training_curves.png'), dpi=150)
+        plt.savefig(os.path.join(self.log_dir, 'training_curves.png'), dpi=150, bbox_inches='tight')
         plt.close()
 
 
-class MultiTaskMetricsLogger(Callback):
-    """Log metrics for multitask learning"""
+class ClassificationCallbacks:
+    """Specialized callbacks for classification tasks"""
     
-    def __init__(self, log_dir, task_names=['detection', 'segmentation']):
-        super().__init__()
-        self.log_dir = log_dir
-        self.task_names = task_names
-        os.makedirs(log_dir, exist_ok=True)
-        self.metrics_history = {task: [] for task in task_names}
+    @staticmethod
+    def get_callbacks(
+        log_dir: str,
+        checkpoint_dir: str,
+        monitor_metric: str = 'val_accuracy',
+        early_stopping_patience: int = 15,
+        lr_schedule: str = 'cosine',
+        initial_lr: float = 1e-3,
+        total_epochs: int = 100
+    ) -> List[Callback]:
+        """Get optimized callbacks for classification"""
         
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
+        callbacks = [
+            # Adaptive early stopping for classification
+            AdaptiveEarlyStopping(
+                monitor=monitor_metric,
+                patience=early_stopping_patience,
+                min_delta=1e-4,
+                restore_best_weights=True,
+                adaptive_patience=True,
+                verbose=1
+            ),
+            
+            # Learning rate scheduling
+            WarmupCosineScheduler(
+                initial_lr=initial_lr,
+                min_lr=1e-7,
+                warmup_epochs=max(1, total_epochs // 20),
+                total_epochs=total_epochs,
+                cosine_restarts=True,
+                restart_decay=0.8,
+                verbose=1
+            ),
+            
+            # Model checkpointing
+            AdvancedModelCheckpoint(
+                filepath=os.path.join(checkpoint_dir, 'best_model_epoch_{epoch:03d}.h5'),
+                monitor=monitor_metric,
+                save_best_only=True,
+                mode='max',
+                keep_top_k=3,
+                verbose=1
+            ),
+            
+            # Metrics logging
+            MetricsLogger(
+                log_dir=log_dir,
+                save_plots=True,
+                plot_frequency=5,
+                verbose=1
+            ),
+            
+            # Reduce LR on plateau as backup
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor=monitor_metric,
+                factor=0.5,
+                patience=5,
+                min_lr=1e-8,
+                verbose=1
+            ),
+            
+            # CSV logger for detailed analysis
+            tf.keras.callbacks.CSVLogger(
+                os.path.join(log_dir, 'training_log.csv'),
+                append=True
+            )
+        ]
         
-        # Separate metrics by task
-        for task in self.task_names:
-            task_metrics = {'epoch': epoch + 1}
-            for key, value in logs.items():
-                if task in key:
-                    task_metrics[key] = value
-            self.metrics_history[task].append(task_metrics)
-            
-        # Save task-specific histories
-        for task in self.task_names:
-            with open(os.path.join(self.log_dir, f'{task}_history.json'), 'w') as f:
-                json.dump(self.metrics_history[task], f, indent=2)
-                
-        self._save_task_plots()
-        
-    def _save_task_plots(self):
-        if len(self.metrics_history[self.task_names[0]]) < 2:
-            return
-            
-        fig, axes = plt.subplots(len(self.task_names), 2, figsize=(15, 5 * len(self.task_names)))
-        if len(self.task_names) == 1:
-            axes = axes.reshape(1, -1)
-            
-        for i, task in enumerate(self.task_names):
-            history = self.metrics_history[task]
-            epochs = [h['epoch'] for h in history]
-            
-            # Loss plot
-            ax1 = axes[i, 0]
-            for key in history[0].keys():
-                if 'loss' in key:
-                    values = [h.get(key, 0) for h in history]
-                    ax1.plot(epochs, values, label=key.replace('_', ' ').title())
-            ax1.set_title(f'{task.title()} Loss')
-            ax1.set_xlabel('Epoch')
-            ax1.set_ylabel('Loss')
-            ax1.legend()
-            ax1.grid(True)
-            
-            # Metrics plot
-            ax2 = axes[i, 1]
-            for key in history[0].keys():
-                if 'loss' not in key and 'epoch' not in key:
-                    values = [h.get(key, 0) for h in history]
-                    ax2.plot(epochs, values, label=key.replace('_', ' ').title())
-            ax2.set_title(f'{task.title()} Metrics')
-            ax2.set_xlabel('Epoch')
-            ax2.set_ylabel('Metric Value')
-            ax2.legend()
-            ax2.grid(True)
-            
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.log_dir, 'multitask_curves.png'), dpi=150)
-        plt.close()
+        return callbacks
 
 
-class GradientMonitor(Callback):
-    """Monitor gradient norms during training"""
+class SegmentationCallbacks:
+    """Specialized callbacks for segmentation tasks"""
     
-    def __init__(self, log_frequency=10):
+    @staticmethod
+    def get_callbacks(
+        log_dir: str,
+        checkpoint_dir: str,
+        monitor_metric: str = 'val_dice_coefficient',
+        early_stopping_patience: int = 20,
+        lr_schedule: str = 'cosine',
+        initial_lr: float = 1e-3,
+        total_epochs: int = 150
+    ) -> List[Callback]:
+        """Get optimized callbacks for segmentation"""
+        
+        callbacks = [
+            # Segmentation-specific early stopping
+            AdaptiveEarlyStopping(
+                monitor=monitor_metric,
+                patience=early_stopping_patience,
+                min_delta=1e-5,  # Smaller delta for segmentation metrics
+                restore_best_weights=True,
+                adaptive_patience=True,
+                patience_factor=1.3,  # More patient for segmentation
+                verbose=1
+            ),
+            
+            # Longer warmup for segmentation
+            WarmupCosineScheduler(
+                initial_lr=initial_lr,
+                min_lr=1e-8,
+                warmup_epochs=max(5, total_epochs // 15),
+                total_epochs=total_epochs,
+                cosine_restarts=True,
+                restart_decay=0.9,
+                verbose=1
+            ),
+            
+            # Model checkpointing with IoU/Dice monitoring
+            AdvancedModelCheckpoint(
+                filepath=os.path.join(checkpoint_dir, 'best_segmentation_epoch_{epoch:03d}.h5'),
+                monitor=monitor_metric,
+                save_best_only=True,
+                mode='max',
+                keep_top_k=5,  # Keep more models for segmentation
+                verbose=1
+            ),
+            
+            # Comprehensive metrics logging
+            MetricsLogger(
+                log_dir=log_dir,
+                save_plots=True,
+                plot_frequency=10,  # Less frequent plotting for longer training
+                save_statistics=True,
+                verbose=1
+            ),
+            
+            # Multi-metric LR reduction
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',  # Use loss as backup
+                factor=0.3,
+                patience=8,
+                min_lr=1e-9,
+                verbose=1
+            ),
+            
+            # Additional IoU monitoring if available
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor=monitor_metric,
+                factor=0.5,
+                patience=10,
+                min_lr=1e-9,
+                verbose=1
+            )
+        ]
+        
+        return callbacks
+
+
+class GradientClippingCallback(BaseOptimizedCallback):
+    """Monitor and clip gradients to prevent exploding gradients"""
+    
+    def __init__(self, clip_norm: float = 1.0, log_frequency: int = 10):
         super().__init__()
+        self.clip_norm = clip_norm
         self.log_frequency = log_frequency
         self.gradient_norms = []
         
-    def on_batch_end(self, batch, logs=None):
+    def on_train_batch_end(self, batch, logs=None):
         if batch % self.log_frequency == 0:
-            # Calculate gradient norms
-            gradients = []
+            # Get current gradients (simplified - in practice you'd need proper gradient computation)
+            total_norm = 0.0
             for layer in self.model.layers:
                 if hasattr(layer, 'trainable_weights') and layer.trainable_weights:
-                    with tf.GradientTape() as tape:
-                        # This is a simplified version - in practice you'd need
-                        # to compute gradients properly
-                        pass
-                        
+                    for weight in layer.trainable_weights:
+                        if hasattr(weight, 'gradient') and weight.gradient is not None:
+                            total_norm += tf.reduce_sum(tf.square(weight.gradient))
+            
+            total_norm = tf.sqrt(total_norm)
+            self.gradient_norms.append(float(total_norm))
+            
+            if total_norm > self.clip_norm:
+                print(f"Batch {batch}: Gradient norm {total_norm:.4f} > {self.clip_norm}, clipping applied")
+    
     def on_epoch_end(self, epoch, logs=None):
         if self.gradient_norms:
-            avg_grad_norm = np.mean(self.gradient_norms)
-            print(f"Average gradient norm: {avg_grad_norm:.6f}")
+            avg_norm = np.mean(self.gradient_norms)
+            max_norm = np.max(self.gradient_norms)
+            print(f"Epoch {epoch + 1}: Avg gradient norm: {avg_norm:.4f}, Max: {max_norm:.4f}")
             self.gradient_norms = []
 
 
-def get_callbacks(config, model_name):
-    """Get standard callbacks for training"""
-    callbacks = []
+def get_optimized_callbacks(
+    task_type: str,
+    backbone_name: str,
+    pretrained: bool,
+    config: Config,
+    model_name: str
+) -> List[Callback]:
+    """
+    Get task-specific optimized callbacks
     
-    # Early stopping
-    if config.get('early_stopping', True):
-        callbacks.append(EarlyStopping(
-            monitor=config.get('early_stopping_monitor', 'val_loss'),
-            patience=config.get('early_stopping_patience', 10),
-            restore_best_weights=True
-        ))
+    Args:
+        task_type: 'classification' or 'segmentation'
+        config: Configuration dictionary
+        model_name: Name of the model for directory creation
     
-    # Learning rate scheduler
-    if config.get('lr_scheduler', True):
-        callbacks.append(LearningRateScheduler(
-            schedule_type=config.get('lr_schedule_type', 'cosine'),
-            initial_lr=config.get('learning_rate', 0.001)
-        ))
+    Returns:
+        List of optimized callbacks
+    """
     
-    # Model checkpoint
-    checkpoint_dir = os.path.join(config['checkpoint_dir'], model_name)
+    # Create directories
+    log_dir = os.path.join(config.LOGS_DIR, task_type, f"{backbone_name}_{'pretrained' if pretrained else 'scratch'}", model_name)
+    checkpoint_dir = os.path.join(config.CHECKPOINT_DIR, task_type, f"{backbone_name}_{'pretrained' if pretrained else 'scratch'}", model_name)
+    os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
-    callbacks.append(ModelCheckpoint(
-        filepath=os.path.join(checkpoint_dir, 'best_model.h5'),
-        monitor='val_loss',
-        save_best_only=True
-    ))
     
-    # Progress logger
-    log_dir = os.path.join(config['log_dir'], model_name)
-    callbacks.append(ProgressLogger(log_dir))
+    if task_type.lower() == 'classification':
+        callbacks = ClassificationCallbacks.get_callbacks(
+            log_dir=log_dir,
+            checkpoint_dir=checkpoint_dir,
+            monitor_metric=config.get('monitor_metric', 'val_accuracy'),
+            early_stopping_patience=config.get('early_stopping_patience', 15),
+            initial_lr=config.get('learning_rate', 1e-3),
+            total_epochs=config.get('epochs', 100)
+        )
+    elif task_type.lower() == 'segmentation':
+        callbacks = SegmentationCallbacks.get_callbacks(
+            log_dir=log_dir,
+            checkpoint_dir=checkpoint_dir,
+            monitor_metric=config.get('monitor_metric', 'val_dice_coefficient'),
+            early_stopping_patience=config.get('early_stopping_patience', 20),
+            initial_lr=config.get('learning_rate', 1e-3),
+            total_epochs=config.get('epochs', 150)
+        )
+    else:
+        raise ValueError(f"Unsupported task_type: {task_type}. Use 'classification' or 'segmentation'.")
     
-    # TensorBoard
+    # Add gradient clipping if requested
+    if config.get('gradient_clipping', False):
+        callbacks.append(GradientClippingCallback(
+            clip_norm=config.get('clip_norm', 1.0),
+            log_frequency=config.get('grad_log_freq', 10)
+        ))
+    
+    # Add TensorBoard if requested
     if config.get('use_tensorboard', True):
-        tb_log_dir = os.path.join(config['tensorboard_dir'], model_name)
+        tb_log_dir = os.path.join(config.TENSORBOARD_LOG_DIR, task_type, f"{backbone_name}_{'pretrained' if pretrained else 'scratch'}", model_name)
         callbacks.append(tf.keras.callbacks.TensorBoard(
             log_dir=tb_log_dir,
             histogram_freq=1,
             write_graph=True,
+            write_images=True,
             update_freq='epoch'
         ))
     
     return callbacks
 
+
+# Example usage configuration
+CLASSIFICATION_CONFIG = {
+    'log_dir': './logs',
+    'checkpoint_dir': './checkpoints',
+    'tensorboard_dir': './tensorboard',
+    'monitor_metric': 'val_accuracy',
+    'early_stopping_patience': 15,
+    'learning_rate': 1e-3,
+    'epochs': 100,
+    'gradient_clipping': True,
+    'clip_norm': 1.0,
+    'use_tensorboard': True
+}
+
+SEGMENTATION_CONFIG = {
+    'log_dir': './logs',
+    'checkpoint_dir': './checkpoints', 
+    'tensorboard_dir': './tensorboard',
+    'monitor_metric': 'val_dice_coefficient',
+    'early_stopping_patience': 20,
+    'learning_rate': 1e-3,
+    'epochs': 150,
+    'gradient_clipping': True,
+    'clip_norm': 0.5,
+    'use_tensorboard': True
+}

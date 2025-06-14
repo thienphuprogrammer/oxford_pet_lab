@@ -3,14 +3,24 @@ import os
 from pathlib import Path
 from dataclasses import dataclass
 
+from typing import List
+import tensorflow as tf
+
 
 @dataclass
 class Config:
     """Global configuration for the Oxford Pet Lab project."""
     
+    # ------------------------------------------------------------------
     # Project paths
+    # ------------------------------------------------------------------
     PROJECT_ROOT = Path(__file__).parent.parent
+    
+    # ------------------------------------------------------------------
+    # Project directories
+    # ------------------------------------------------------------------
     DATA_DIR = PROJECT_ROOT / "data"
+    CONFIG_DIR = PROJECT_ROOT / "config"
     RESULTS_DIR = PROJECT_ROOT / "results"
     MODELS_DIR = RESULTS_DIR / "models"
     LOGS_DIR = RESULTS_DIR / "logs"
@@ -18,32 +28,31 @@ class Config:
     PREDICTIONS_DIR = RESULTS_DIR / "predictions"
     
     # Create directories if they don't exist
-    for dir_path in [DATA_DIR, RESULTS_DIR, MODELS_DIR, LOGS_DIR, PLOTS_DIR, PREDICTIONS_DIR]:
+    for dir_path in [
+        DATA_DIR, 
+        CONFIG_DIR,
+        RESULTS_DIR, 
+        MODELS_DIR, 
+        LOGS_DIR, 
+        PLOTS_DIR, 
+        PREDICTIONS_DIR
+    ]:
         dir_path.mkdir(parents=True, exist_ok=True)
     
     # Dataset configuration
     DATASET_NAME = "oxford_iiit_pet:4.0.0"
     DATASET_VERSION = "4.0.0"
+
+    # Model configuration
+    NUM_CLASSES_DETECTION = 37
+    NUM_CLASSES_SEGMENTATION = 37
+    NUM_CLASSES_MULTITASK = 37
     
     # Data preprocessing
     IMG_HEIGHT = 224
     IMG_WIDTH = 224
     IMG_CHANNELS = 3
     IMG_SIZE = (IMG_HEIGHT, IMG_WIDTH)
-    
-    # Training configuration
-    BATCH_SIZE = 16
-    VALIDATION_SPLIT = 0.2
-    EPOCHS = 100
-    EARLY_STOPPING_PATIENCE = 10
-    REDUCE_LR_PATIENCE = 5
-    
-    # Model configuration
-    NUM_CLASSES = 37  # 37 different pet breeds
-    LEARNING_RATE = 1e-4
-    
-    # Bounding box configuration
-    BBOX_FORMAT = "xyxy"  # x1, y1, x2, y2 format
     
     # Augmentation configuration
     ENABLE_AUGMENTATION = True

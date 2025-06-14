@@ -1,0 +1,187 @@
+loss_configs:
+  detection:
+    loss_type: unified_detection
+    bbox_loss_weight: 2.0
+    cls_loss_weight: 1.0
+    quality_loss_weight: 1.0
+    use_eiou: true
+    use_varifocal: true
+    use_quality_focal: true
+  segmentation:
+    loss_type: unified_segmentation
+    ce_weight: 1.0
+    dice_weight: 1.0
+    boundary_weight: 0.5
+    hausdorff_weight: 0.3
+    use_adaptive_dice: true
+    use_boundary_loss: true
+    use_hausdorff_loss: true
+
+optimizer_configs:
+  detection:
+    optimizer_type: unified_detection
+    bbox_loss_weight: 2.0
+    cls_loss_weight: 1.0
+    quality_loss_weight: 1.0
+    use_eiou: true
+    use_varifocal: true
+    use_quality_focal: true
+  segmentation:
+    optimizer_type: unified_segmentation
+    ce_weight: 1.0
+    dice_weight: 1.0
+    boundary_weight: 0.5
+    hausdorff_weight: 0.3
+    use_adaptive_dice: true
+    use_boundary_loss: true
+    use_hausdorff_loss: true
+
+metrics_configs:
+  detection:
+    metrics_type: unified_detection
+    iou_thresholds: [0.3, 0.5, 0.7]
+    metrics: [iou, mae, precision, recall, accuracy]
+  segmentation:
+    metrics_type: unified_segmentation
+    metrics: [dice, pixel_accuracy, mean_iou]
+
+callbacks_configs:
+  detection:
+    callbacks_type: unified_detection
+    early_stopping_patience: 15
+    learning_rate: 1e-3
+    epochs: 100
+    gradient_clipping: true
+    clip_norm: 1.0
+    use_tensorboard: true
+  segmentation:
+    callbacks_type: unified_segmentation
+    early_stopping_patience: 20
+    learning_rate: 1e-3
+    epochs: 150
+    gradient_clipping: true
+    clip_norm: 0.5
+    use_tensorboard: true
+
+tensorboard_configs:
+  detection:
+    tensorboard_type: unified_detection
+    tensorboard_dir: ./tensorboard/detection
+    tensorboard_log_dir: ./tensorboard/detection
+
+detection_models:  
+  resnet50:
+    backbone: ResNet50
+    input_shape: (224, 224, 3)
+    pretrained_weights: imagenet
+    freeze_backbone: false
+    detection_head_units: [256, 128, 64]
+    bbox_output_units: 4
+    class_output_units: 37
+
+  mobilenetv2:
+    backbone: MobileNetV2
+    input_shape: (224, 224, 3)
+    pretrained_weights: imagenet
+    freeze_backbone: false
+    detection_head_units: [256, 128, 64]
+    bbox_output_units: 4
+    class_output_units: 37
+
+  efficientnetb0:
+    backbone: EfficientNetB0
+    input_shape: (224, 224, 3)
+    pretrained_weights: imagenet
+    freeze_backbone: false
+    detection_head_units: [256, 128, 64]
+    bbox_output_units: 4
+    class_output_units: 37
+
+segmentation_models:
+  pretrained_unet:
+    backbone: EfficientNetV2B0
+    input_shape: (224, 224, 3)
+    pretrained_weights: imagenet
+    pretrained: true
+    freeze_backbone: false
+    decoder_filters: [256, 128, 64, 32, 16]
+    use_attention: true
+    use_deep_supervision: true
+    fpn_filters: [256, 256, 256, 256, 256]
+    aux_heads: 3
+
+  unet3plus:
+    backbone: EfficientNetV2B0
+    input_shape: (224, 224, 3)
+    pretrained_weights: imagenet
+    pretrained: true
+    freeze_backbone: false
+    encoder_filters: [64, 128, 256, 512, 1024]
+    decoder_filters: [64, 64, 64, 64]
+    use_attention: true
+    use_deep_supervision: true
+
+  transunet:
+    backbone: ResNet50
+    input_shape: (224, 224, 3)
+    pretrained_weights: imagenet
+    freeze_backbone: false
+    encoder_filters_cnn: [64, 128]
+    encoder_max_pooling_2d: 2
+    encoder_filters_residual: [128, 256]
+    transformer_num_heads: 12
+    transformer_key_dim: 64
+    transformer_embed_dim: 768
+
+  deeplabv3plus:
+    backbone: ResNet50
+    input_shape: (224, 224, 3)
+    pretrained_weights: imagenet
+    freeze_backbone: false
+    decoder_filters: [512, 256, 128, 64, 32]
+    num_classes: 3
+    use_attention: true
+    use_deep_supervision: true
+
+multitask_models:
+  resnet50:
+    input_shape: (224, 224, 3)
+    feature_dim: 2048
+    pretrained_weights: imagenet
+    freeze_backbone: false
+    shared_features: 512
+    detection_head_units: [512, 256, 128, 64]
+    detection_head_dropout: 0.5
+    classification_head_units: [512, 256, 128, 64]
+    classification_head_dropout: 0.5
+    segmentation_head_units: [512, 256, 128, 64]
+    segmentation_head_dropout: 0.3
+    bbox_output_units: 4
+    class_output_units: 37
+    seg_output_units: 3
+    loss_weights:
+      detection: 1.0
+      segmentation: 1.0
+      bbox: 1.0
+      classification: 1.0
+
+  efficientnetb0:
+    input_shape: (224, 224, 3)
+    feature_dim: 1280
+    pretrained_weights: imagenet
+    freeze_backbone: false
+    shared_features: 512
+    detection_head_units: [512, 256, 128, 64]
+    detection_head_dropout: 0.5
+    classification_head_units: [512, 256, 128, 64]
+    classification_head_dropout: 0.5
+    segmentation_head_units: [512, 256, 128, 64]
+    segmentation_head_dropout: 0.3
+    bbox_output_units: 4
+    class_output_units: 37
+    seg_output_units: 3
+    loss_weights:
+      detection: 1.0
+      segmentation: 1.0
+      bbox: 1.0
+      classification: 1.0

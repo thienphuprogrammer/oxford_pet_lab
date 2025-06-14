@@ -201,7 +201,7 @@ class ModelBuilder:
         **kwargs
     ) -> BaseDetectionModel:
         """Build detection model"""
-        from src.models.detection_model import SimpleDetectionModel, PretrainedDetectionModel
+        from models.detecttion.detection_model import SimpleDetectionModel, PretrainedDetectionModel
         
         if model_type == 'simple':
             return SimpleDetectionModel(num_classes, config=config, **kwargs)
@@ -221,7 +221,7 @@ class ModelBuilder:
         **kwargs
     ) -> BaseSegmentationModel:
         """Build segmentation model"""
-        from src.models.segmentation_model import SimpleUNet, PretrainedUNet, DeepLabV3Plus
+        from models.segmentation.segmentation_model import SimpleUNet, PretrainedUNet, DeepLabV3Plus
         
         if model_type == 'simple_unet':
             return SimpleUNet(num_classes, config=config, **kwargs)
@@ -237,7 +237,7 @@ class ModelBuilder:
             )
         else:
             # Delegate to segmentation_model factory for additional SOTA architectures
-            from src.models.segmentation_model import create_segmentation_model
+            from models.segmentation.segmentation_model import create_segmentation_model
             try:
                 return create_segmentation_model(model_type, num_classes, config=config, **kwargs)
             except Exception as e:

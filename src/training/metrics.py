@@ -2,7 +2,6 @@
 Custom metrics for object detection and semantic segmentation
 """
 import tensorflow as tf
-import numpy as np
 
 
 class IoUMetric(tf.keras.metrics.Metric):
