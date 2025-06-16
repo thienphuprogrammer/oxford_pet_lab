@@ -6,7 +6,6 @@ from src.training.base import BaseTrainer
 class Trainer(BaseTrainer):
     """Main trainer implementation for single-task learning."""
     
-    @tf.function
     def train_step(self, batch) -> Dict[str, tf.Tensor]:
         """Optimized training step."""
         if self.task_type == 'detection':
@@ -16,7 +15,6 @@ class Trainer(BaseTrainer):
         else:
             raise ValueError(f"Unsupported task type: {self.task_type}")
             
-    @tf.function
     def validation_step(self, batch) -> Dict[str, tf.Tensor]:
         """Optimized validation step."""
         if self.task_type == 'detection':
@@ -113,7 +111,8 @@ class MultiTaskTrainer(BaseTrainer):
         # Task-specific metrics
         self.detection_metrics = get_metrics('detection', self.models_config.NUM_CLASSES['detection'])
         self.segmentation_metrics = get_metrics('segmentation', self.models_config.NUM_CLASSES['segmentation'])
-        
+
+
     @tf.function
     def train_step(self, batch) -> Dict[str, tf.Tensor]:
         """Enhanced multitask training step."""
@@ -143,8 +142,9 @@ class MultiTaskTrainer(BaseTrainer):
             'seg_loss': seg_loss,
             'det_weight': det_weight,
             'seg_weight': seg_weight
-        }
-        
+        }        
+
+    
     @tf.function
     def validation_step(self, batch) -> Dict[str, tf.Tensor]:
         """Enhanced multitask validation step."""

@@ -318,11 +318,38 @@ class DetectionMetrics(tf.keras.metrics.Metric):
         self.classification_acc = tf.keras.metrics.CategoricalAccuracy(name='classification_acc')
     
     def update_state(self, y_true, y_pred, sample_weight=None):
-        self.iou.update_state(y_true['bbox'], y_pred['bbox'])
-        self.mae.update_state(y_true['bbox'], y_pred['bbox'])
-        self.precision.update_state(y_true['bbox'], y_pred['bbox'])
-        self.recall.update_state(y_true['bbox'], y_pred['bbox'])
-        self.classification_acc.update_state(y_true['cls'], y_pred['cls'])
+        """Update detection metrics while gracefully handling various key names.
+
+        This method supports multiple naming conventions across the codebase:
+        Bounding-box keys: ``bbox``, ``bbox_output``, ``head_bbox``, ``bounding_box``.
+        Classification keys: ``class``, ``cls``, ``class_output``, ``label``, ``species``.
+        """
+        # Helper to fetch first available tensor given a list of candidate keys
+        def _get_first(d, keys):
+            for k in keys:
+                if k in d:
+                    return d[k]
+            return None
+
+        # --- Bounding boxes ---
+        bbox_true = _get_first(y_true, ['bbox', 'bbox_output', 'head_bbox', 'bounding_box'])
+        bbox_pred = _get_first(y_pred, ['bbox', 'bbox_output', 'head_bbox', 'bounding_box'])
+        if bbox_true is not None and bbox_pred is not None:
+            self.iou.update_state(bbox_true, bbox_pred)
+            self.mae.update_state(bbox_true, bbox_pred)
+            self.precision.update_state(bbox_true, bbox_pred)
+            self.recall.update_state(bbox_true, bbox_pred)
+
+        # --- Classification ---
+        cls_true = _get_first(y_true, ['class', 'cls', 'label', 'pet_class', 'species', 'class_output'])
+        cls_pred = _get_first(y_pred, ['class', 'cls', 'label', 'class_output', 'species'])
+        if cls_true is not None and cls_pred is not None:
+            # Convert integer labels to one-hot if required
+            if len(cls_true.shape) == 1 or (len(cls_true.shape) == 2 and cls_true.shape[-1] == 1):
+                num_classes = tf.reduce_max(cls_true) + 1
+                cls_true = tf.squeeze(tf.one_hot(tf.cast(cls_true, tf.int32), depth=num_classes))
+            self.classification_acc.update_state(cls_true, cls_pred)
+
     
     def result(self):
         return {
