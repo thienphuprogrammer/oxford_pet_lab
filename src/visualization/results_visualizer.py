@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from src.config.config import Config
+from src.src.config.config import Config
 
 class ResultsVisualizer:
     def __init__(self):

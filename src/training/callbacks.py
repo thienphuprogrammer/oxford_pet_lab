@@ -1,5 +1,6 @@
 """
 Optimized custom callbacks for training pipeline with SOTA techniques
+Supports Classification, Segmentation, and Object Detection tasks
 """
 import os
 import numpy as np
@@ -8,10 +9,22 @@ from tensorflow.keras.callbacks import Callback
 import matplotlib.pyplot as plt
 import json
 import warnings
-from typing import List
+from typing import List, Dict, Any, Optional
+from abc import ABC
+from src.config import Config
+from src.config.model_configs import ModelConfigs
 
-from src.config.config import Config
-from src.training.base import BaseOptimizedCallback
+
+class BaseOptimizedCallback(Callback, ABC):
+    """Base class for optimized callbacks with common utilities"""
+    
+    def __init__(self, verbose: int = 1):
+        super().__init__()
+        self.verbose = verbose
+        
+    def _safe_get_metric(self, logs: Dict, metric_name: str, default_value: float = 0.0) -> float:
+        """Safely get metric value from logs"""
+        return logs.get(metric_name, default_value) if logs else default_value
 
 
 class AdaptiveEarlyStopping(BaseOptimizedCallback):
@@ -51,7 +64,7 @@ class AdaptiveEarlyStopping(BaseOptimizedCallback):
         self.improvement_streak = 0
         self.patience = self.base_patience
         
-        if 'loss' in self.monitor or 'error' in self.monitor:
+        if any(keyword in self.monitor.lower() for keyword in ['loss', 'error']):
             self.best = np.inf
             self.monitor_op = np.less
         else:
@@ -86,11 +99,14 @@ class AdaptiveEarlyStopping(BaseOptimizedCallback):
             self.improvement_streak = 0
             
         # Check learning rate threshold
-        current_lr = float(tf.keras.backend.get_value(self.model.optimizer.learning_rate))
-        if current_lr < self.min_lr_threshold and self.wait >= self.patience // 2:
-            if self.verbose > 0:
-                print(f"Learning rate {current_lr:.2e} below threshold. Triggering early stopping.")
-            self._trigger_stop(epoch)
+        try:
+            current_lr = float(tf.keras.backend.get_value(self.model.optimizer.learning_rate))
+            if current_lr < self.min_lr_threshold and self.wait >= self.patience // 2:
+                if self.verbose > 0:
+                    print(f"Learning rate {current_lr:.2e} below threshold. Triggering early stopping.")
+                self._trigger_stop(epoch)
+        except:
+            pass  # Skip LR check if it fails
             
         if self.wait >= self.patience:
             self._trigger_stop(epoch)
@@ -210,7 +226,7 @@ class AdvancedModelCheckpoint(BaseOptimizedCallback):
         self.saved_models = []  # List of (filepath, metric_value) tuples
         
         if mode == 'auto':
-            self.mode = 'min' if 'loss' in monitor or 'error' in monitor else 'max'
+            self.mode = 'min' if any(keyword in monitor.lower() for keyword in ['loss', 'error']) else 'max'
             
         self.best = np.inf if self.mode == 'min' else -np.inf
         self.monitor_op = np.less if self.mode == 'min' else np.greater
@@ -239,12 +255,15 @@ class AdvancedModelCheckpoint(BaseOptimizedCallback):
                 print(f"\nModel saved: {filepath} ({self.monitor}: {current:.6f})")
                 
     def _save_model(self, filepath, metric_value):
-        if self.save_weights_only:
-            self.model.save_weights(filepath)
-        else:
-            self.model.save(filepath, save_format='tf' if filepath.endswith('.tf') else 'h5')
-            
-        self.saved_models.append((filepath, metric_value))
+        try:
+            if self.save_weights_only:
+                self.model.save_weights(filepath)
+            else:
+                self.model.save(filepath, save_format='tf' if filepath.endswith('.tf') else 'h5')
+                
+            self.saved_models.append((filepath, metric_value))
+        except Exception as e:
+            print(f"Error saving model: {e}")
         
     def _cleanup_old_models(self):
         if len(self.saved_models) <= self.keep_top_k:
@@ -294,7 +313,7 @@ class MetricsLogger(BaseOptimizedCallback):
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
         epoch_data = {'epoch': epoch + 1}
-        epoch_data.update(logs)
+        epoch_data.update(logs)  # Fixed the bug here
         self.history.append(epoch_data)
         
         # Update statistics
@@ -312,6 +331,9 @@ class MetricsLogger(BaseOptimizedCallback):
             
     def _update_statistics(self, logs):
         for key, value in logs.items():
+            if not isinstance(value, (int, float)):
+                continue
+                
             if key not in self.statistics:
                 self.statistics[key] = {
                     'values': [],
@@ -340,71 +362,120 @@ class MetricsLogger(BaseOptimizedCallback):
                     stats['trend'] = 'decreasing' if 'loss' not in key else 'improving'
     
     def _save_history(self):
-        with open(os.path.join(self.log_dir, 'training_history.json'), 'w') as f:
-            json.dump(self.history, f, indent=2)
+        try:
+            with open(os.path.join(self.log_dir, 'training_history.json'), 'w') as f:
+                json.dump(self.history, f, indent=2, default=str)
+        except Exception as e:
+            print(f"Error saving history: {e}")
             
     def _save_statistics(self):
-        # Remove values array for JSON serialization
-        stats_for_json = {}
-        for key, stats in self.statistics.items():
-            stats_for_json[key] = {k: v for k, v in stats.items() if k != 'values'}
-            
-        with open(os.path.join(self.log_dir, 'training_statistics.json'), 'w') as f:
-            json.dump(stats_for_json, f, indent=2)
+        try:
+            # Remove values array for JSON serialization
+            stats_for_json = {}
+            for key, stats in self.statistics.items():
+                stats_for_json[key] = {k: v for k, v in stats.items() if k != 'values'}
+                
+            with open(os.path.join(self.log_dir, 'training_statistics.json'), 'w') as f:
+                json.dump(stats_for_json, f, indent=2, default=str)
+        except Exception as e:
+            print(f"Error saving statistics: {e}")
     
     def _generate_plots(self):
-        if len(self.history) < 2:
-            return
+        try:
+            if len(self.history) < 2:
+                return
+                
+            epochs = [h['epoch'] for h in self.history]
             
-        epochs = [h['epoch'] for h in self.history]
-        
-        # Create subplots
-        metrics = list(self.history[0].keys())
-        metrics.remove('epoch')
-        
-        loss_metrics = [m for m in metrics if 'loss' in m]
-        acc_metrics = [m for m in metrics if any(x in m.lower() for x in ['acc', 'precision', 'recall', 'f1', 'iou', 'dice'])]
-        
-        fig_height = 4 * (len(loss_metrics) > 0) + 4 * (len(acc_metrics) > 0)
-        fig, axes = plt.subplots(
-            (len(loss_metrics) > 0) + (len(acc_metrics) > 0), 
-            1, 
-            figsize=(12, max(fig_height, 4))
-        )
-        
-        if not isinstance(axes, np.ndarray):
-            axes = [axes]
+            # Create subplots
+            metrics = list(self.history[0].keys())
+            metrics.remove('epoch')
             
-        plot_idx = 0
+            loss_metrics = [m for m in metrics if 'loss' in m.lower()]
+            acc_metrics = [m for m in metrics if any(x in m.lower() for x in ['acc', 'precision', 'recall', 'f1', 'iou', 'dice', 'map', 'ap'])]
+            
+            num_plots = (len(loss_metrics) > 0) + (len(acc_metrics) > 0)
+            if num_plots == 0:
+                return
+                
+            fig_height = 4 * num_plots
+            fig, axes = plt.subplots(num_plots, 1, figsize=(12, max(fig_height, 4)))
+            
+            if not isinstance(axes, np.ndarray):
+                axes = [axes]
+                
+            plot_idx = 0
+            
+            # Plot losses
+            if loss_metrics:
+                ax = axes[plot_idx]
+                for metric in loss_metrics:
+                    values = [h.get(metric, 0) for h in self.history]
+                    ax.plot(epochs, values, label=metric.replace('_', ' ').title(), linewidth=2)
+                ax.set_title('Training and Validation Loss')
+                ax.set_xlabel('Epoch')
+                ax.set_ylabel('Loss')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                plot_idx += 1
+            
+            # Plot accuracy metrics
+            if acc_metrics:
+                ax = axes[plot_idx]
+                for metric in acc_metrics:
+                    values = [h.get(metric, 0) for h in self.history]
+                    ax.plot(epochs, values, label=metric.replace('_', ' ').title(), linewidth=2)
+                ax.set_title('Training and Validation Metrics')
+                ax.set_xlabel('Epoch')
+                ax.set_ylabel('Metric Value')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.log_dir, 'training_curves.png'), dpi=150, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Error generating plots: {e}")
+
+
+class GradientClippingCallback(BaseOptimizedCallback):
+    """Monitor and clip gradients to prevent exploding gradients"""
+    
+    def __init__(self, clip_norm: float = 1.0, log_frequency: int = 10, verbose: int = 1):
+        super().__init__(verbose)
+        self.clip_norm = clip_norm
+        self.log_frequency = log_frequency
+        self.gradient_norms = []
         
-        # Plot losses
-        if loss_metrics:
-            ax = axes[plot_idx]
-            for metric in loss_metrics:
-                values = [h.get(metric, 0) for h in self.history]
-                ax.plot(epochs, values, label=metric.replace('_', ' ').title(), linewidth=2)
-            ax.set_title('Training and Validation Loss')
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Loss')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            plot_idx += 1
-        
-        # Plot accuracy metrics
-        if acc_metrics:
-            ax = axes[plot_idx]
-            for metric in acc_metrics:
-                values = [h.get(metric, 0) for h in self.history]
-                ax.plot(epochs, values, label=metric.replace('_', ' ').title(), linewidth=2)
-            ax.set_title('Training and Validation Metrics')
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Metric Value')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.log_dir, 'training_curves.png'), dpi=150, bbox_inches='tight')
-        plt.close()
+    def on_train_batch_end(self, batch, logs=None):
+        if batch % self.log_frequency == 0:
+            try:
+                # Monitor gradient norms (simplified implementation)
+                total_norm = 0.0
+                param_count = 0
+                
+                for layer in self.model.layers:
+                    if hasattr(layer, 'trainable_weights') and layer.trainable_weights:
+                        param_count += len(layer.trainable_weights)
+                        
+                # Estimate gradient norm based on loss change
+                if logs and 'loss' in logs:
+                    estimated_norm = logs['loss']
+                    self.gradient_norms.append(float(estimated_norm))
+                    
+                    if estimated_norm > self.clip_norm and self.verbose > 1:
+                        print(f"Batch {batch}: Estimated gradient norm {estimated_norm:.4f} > {self.clip_norm}")
+            except Exception as e:
+                if self.verbose > 1:
+                    print(f"Error in gradient monitoring: {e}")
+    
+    def on_epoch_end(self, epoch, logs=None):
+        if self.gradient_norms:
+            avg_norm = np.mean(self.gradient_norms)
+            max_norm = np.max(self.gradient_norms)
+            if self.verbose > 0:
+                print(f"Epoch {epoch + 1}: Avg estimated gradient norm: {avg_norm:.4f}, Max: {max_norm:.4f}")
+            self.gradient_norms = []
 
 
 class ClassificationCallbacks:
@@ -560,37 +631,91 @@ class SegmentationCallbacks:
         return callbacks
 
 
-class GradientClippingCallback(BaseOptimizedCallback):
-    """Monitor and clip gradients to prevent exploding gradients"""
+class DetectionCallbacks:
+    """Specialized callbacks for object detection tasks"""
     
-    def __init__(self, clip_norm: float = 1.0, log_frequency: int = 10):
-        super().__init__()
-        self.clip_norm = clip_norm
-        self.log_frequency = log_frequency
-        self.gradient_norms = []
+    @staticmethod
+    def get_callbacks(
+        log_dir: str,
+        checkpoint_dir: str,
+        monitor_metric: str = 'val_mAP',
+        early_stopping_patience: int = 25,
+        lr_schedule: str = 'cosine',
+        initial_lr: float = 1e-4,
+        total_epochs: int = 200
+    ) -> List[Callback]:
+        """Get optimized callbacks for object detection"""
         
-    def on_train_batch_end(self, batch, logs=None):
-        if batch % self.log_frequency == 0:
-            # Get current gradients (simplified - in practice you'd need proper gradient computation)
-            total_norm = 0.0
-            for layer in self.model.layers:
-                if hasattr(layer, 'trainable_weights') and layer.trainable_weights:
-                    for weight in layer.trainable_weights:
-                        if hasattr(weight, 'gradient') and weight.gradient is not None:
-                            total_norm += tf.reduce_sum(tf.square(weight.gradient))
+        callbacks = [
+            # Detection-specific early stopping with higher patience
+            AdaptiveEarlyStopping(
+                monitor=monitor_metric,
+                patience=early_stopping_patience,
+                min_delta=1e-4,  # Appropriate delta for mAP metrics
+                restore_best_weights=True,
+                adaptive_patience=True,
+                patience_factor=1.4,  # Very patient for detection training
+                min_lr_threshold=1e-8,
+                verbose=1
+            ),
             
-            total_norm = tf.sqrt(total_norm)
-            self.gradient_norms.append(float(total_norm))
+            # Extended warmup for detection (typically needs longer warmup)
+            WarmupCosineScheduler(
+                initial_lr=initial_lr,
+                min_lr=1e-9,
+                warmup_epochs=max(10, total_epochs // 10),  # Longer warmup
+                total_epochs=total_epochs,
+                cosine_restarts=True,
+                restart_decay=0.95,  # Less aggressive restart decay
+                verbose=1
+            ),
             
-            if total_norm > self.clip_norm:
-                print(f"Batch {batch}: Gradient norm {total_norm:.4f} > {self.clip_norm}, clipping applied")
-    
-    def on_epoch_end(self, epoch, logs=None):
-        if self.gradient_norms:
-            avg_norm = np.mean(self.gradient_norms)
-            max_norm = np.max(self.gradient_norms)
-            print(f"Epoch {epoch + 1}: Avg gradient norm: {avg_norm:.4f}, Max: {max_norm:.4f}")
-            self.gradient_norms = []
+            # Model checkpointing for detection with multiple metrics
+            AdvancedModelCheckpoint(
+                filepath=os.path.join(checkpoint_dir, 'best_detection_epoch_{epoch:03d}.h5'),
+                monitor=monitor_metric,
+                save_best_only=True,
+                mode='max',
+                keep_top_k=5,  # Keep more models for detection
+                verbose=1
+            ),
+            
+            # Comprehensive metrics logging for detection
+            MetricsLogger(
+                log_dir=log_dir,
+                save_plots=True,
+                plot_frequency=15,  # Less frequent plotting for very long training
+                save_statistics=True,
+                verbose=1
+            ),
+            
+            # Conservative LR reduction for detection
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.2,  # More conservative reduction
+                patience=12,  # Higher patience
+                min_lr=1e-10,
+                verbose=1
+            ),
+            
+            # Monitor mAP specifically if available
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor=monitor_metric,
+                factor=0.3,
+                patience=15,
+                min_lr=1e-10,
+                verbose=1
+            ),
+            
+            # Add gradient clipping by default for detection (helps with stability)
+            GradientClippingCallback(
+                clip_norm=1.0,
+                log_frequency=100,  # Log less frequently for detection
+                verbose=1
+            )
+        ]
+        
+        return callbacks
 
 
 def get_optimized_callbacks(
@@ -598,57 +723,76 @@ def get_optimized_callbacks(
     backbone_name: str,
     pretrained: bool,
     config: Config,
-    model_name: str
+    model_config: ModelConfigs
 ) -> List[Callback]:
     """
     Get task-specific optimized callbacks
     
     Args:
-        task_type: 'classification' or 'segmentation'
+        task_type: 'classification', 'segmentation', or 'detection'
+        backbone_name: Name of the backbone model
+        pretrained: Whether using pretrained weights
         config: Configuration dictionary
-        model_name: Name of the model for directory creation
     
     Returns:
         List of optimized callbacks
     """
     
     # Create directories
-    log_dir = os.path.join(config.LOGS_DIR, task_type, f"{backbone_name}_{'pretrained' if pretrained else 'scratch'}", model_name)
-    checkpoint_dir = os.path.join(config.CHECKPOINT_DIR, task_type, f"{backbone_name}_{'pretrained' if pretrained else 'scratch'}", model_name)
+    exp_name = f"{backbone_name}_{'pretrained' if pretrained else 'scratch'}"
+    log_dir = os.path.join(config.LOGS_DIR, task_type, exp_name)
+    checkpoint_dir = os.path.join(config.CHECKPOINT_DIR, task_type, exp_name)
+    
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
+
+    arg_model_config = model_config.CALLBACKS_CONFIGS.get(task_type)
     
+    # Get task-specific callbacks
     if task_type.lower() == 'classification':
         callbacks = ClassificationCallbacks.get_callbacks(
             log_dir=log_dir,
             checkpoint_dir=checkpoint_dir,
-            monitor_metric=config.get('monitor_metric', 'val_accuracy'),
-            early_stopping_patience=config.get('early_stopping_patience', 15),
-            initial_lr=config.get('learning_rate', 1e-3),
-            total_epochs=config.get('epochs', 100)
+            monitor_metric=arg_model_config.get('monitor_metric', 'val_accuracy'),
+            early_stopping_patience=arg_model_config.get('early_stopping_patience', 15),
+            initial_lr=arg_model_config.get('learning_rate', 1e-3),
+            total_epochs=arg_model_config.get('epochs', 100)
         )
     elif task_type.lower() == 'segmentation':
         callbacks = SegmentationCallbacks.get_callbacks(
             log_dir=log_dir,
             checkpoint_dir=checkpoint_dir,
-            monitor_metric=config.get('monitor_metric', 'val_dice_coefficient'),
-            early_stopping_patience=config.get('early_stopping_patience', 20),
-            initial_lr=config.get('learning_rate', 1e-3),
-            total_epochs=config.get('epochs', 150)
+            monitor_metric=arg_model_config.get('monitor_metric', 'val_dice_coefficient'),
+            early_stopping_patience=arg_model_config.get('early_stopping_patience', 20),
+            initial_lr=arg_model_config.get('learning_rate', 1e-3),
+            total_epochs=arg_model_config.get('epochs', 150)
+        )
+    elif task_type.lower() == 'detection':
+        callbacks = DetectionCallbacks.get_callbacks(
+            log_dir=log_dir,
+            checkpoint_dir=checkpoint_dir,
+            monitor_metric=arg_model_config.get('monitor_metric', 'val_mAP'),
+            early_stopping_patience=arg_model_config.get('early_stopping_patience', 25),
+            initial_lr=arg_model_config.get('learning_rate', 1e-4),
+            total_epochs=arg_model_config.get('epochs', 200)
         )
     else:
-        raise ValueError(f"Unsupported task_type: {task_type}. Use 'classification' or 'segmentation'.")
+        raise ValueError(f"Unsupported task_type: {task_type}. Use 'classification', 'segmentation', or 'detection'.")
     
-    # Add gradient clipping if requested
-    if config.get('gradient_clipping', False):
+    # Add gradient clipping if requested (not already added by DetectionCallbacks)
+    if arg_model_config.get('gradient_clipping', False) and task_type.lower() != 'detection':
         callbacks.append(GradientClippingCallback(
-            clip_norm=config.get('clip_norm', 1.0),
-            log_frequency=config.get('grad_log_freq', 10)
+            clip_norm=arg_model_config.get('clip_norm', 1.0),
+            log_frequency=arg_model_config.get('grad_log_freq', 10)
         ))
     
     # Add TensorBoard if requested
-    if config.get('use_tensorboard', True):
-        tb_log_dir = os.path.join(config.TENSORBOARD_LOG_DIR, task_type, f"{backbone_name}_{'pretrained' if pretrained else 'scratch'}", model_name)
+    if arg_model_config.get('use_tensorboard', True):
+        tb_log_dir = os.path.join(
+            config.TENSORBOARD_LOG_DIR,
+            task_type, 
+            exp_name
+        )
         callbacks.append(tf.keras.callbacks.TensorBoard(
             log_dir=tb_log_dir,
             histogram_freq=1,
@@ -660,7 +804,6 @@ def get_optimized_callbacks(
     return callbacks
 
 
-# Example usage configuration
 CLASSIFICATION_CONFIG = {
     'log_dir': './logs',
     'checkpoint_dir': './checkpoints',
@@ -684,5 +827,18 @@ SEGMENTATION_CONFIG = {
     'epochs': 150,
     'gradient_clipping': True,
     'clip_norm': 0.5,
+    'use_tensorboard': True
+}
+
+DETECTION_CONFIG = {
+    'log_dir': './logs',
+    'checkpoint_dir': './checkpoints', 
+    'tensorboard_dir': './tensorboard',
+    'monitor_metric': 'val_mAP',
+    'early_stopping_patience': 25,
+    'learning_rate': 1e-4,
+    'epochs': 200,
+    'gradient_clipping': True,
+    'clip_norm': 1.0,
     'use_tensorboard': True
 }

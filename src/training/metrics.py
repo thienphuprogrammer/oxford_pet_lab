@@ -2,7 +2,7 @@
 Custom metrics for object detection and semantic segmentation
 """
 import tensorflow as tf
-
+from typing import List
 
 class IoUMetric(tf.keras.metrics.Metric):
     """Intersection over Union metric for bounding boxes"""
@@ -309,7 +309,7 @@ class MultiTaskMetrics(tf.keras.metrics.Metric):
 
 
 class DetectionMetrics(tf.keras.metrics.Metric):
-    def __init__(self, name='detection_metrics', **kwargs):
+    def __init__(self, num_classes: int = None, name='detection_metrics', **kwargs):
         super().__init__(name=name, **kwargs)
         self.iou = IoUMetric()
         self.mae = MeanAverageError()
@@ -368,7 +368,7 @@ class SegmentationMetrics(tf.keras.metrics.Metric):
             self.mean_iou.reset_state()
 
 
-def get_metrics(task_type='detection', num_classes=None):
+def get_metrics(task_type='detection', num_classes=None) -> List[tf.keras.metrics.Metric]:
     """Factory function to get metrics based on task type"""
     if task_type == 'detection':
         return [DetectionMetrics(num_classes=num_classes)]

@@ -3,12 +3,24 @@ import numpy as np
 from typing import Dict, Any, Tuple, Optional, List
 from src.config.config import Config
 
+_SHARP_KERNEL = tf.constant(
+    [[0, -1, 0],
+     [-1, 5, -1],
+     [0, -1, 0]], dtype=tf.float32
+)
+_SHARP_KERNEL = tf.reshape(
+    tf.tile(_SHARP_KERNEL[..., tf.newaxis], [1, 1, 3]),  # (3,3,3)
+    [3, 3, 3, 1]                                         # (kh, kw, in_channels, channel_multiplier)
+)
+
 class DataPreprocessor:
     """Enhanced data preprocessing utilities for Oxford Pet dataset with performance optimizations."""
     
     def __init__(self, config: Config = None, shuffle_buffer: int = 1000):
         self.config = config or Config()
         self.shuffle_buffer = shuffle_buffer
+
+        self._target_h, self._target_w = self.config.IMG_SIZE
         
         # Precompute constants for better performance
         self.img_size_tensor = tf.constant(self.config.IMG_SIZE, dtype=tf.int32)
@@ -22,6 +34,13 @@ class DataPreprocessor:
         self.use_imagenet_normalization = getattr(config, 'USE_IMAGENET_NORM', True)
         self.preserve_aspect_ratio = getattr(config, 'PRESERVE_ASPECT_RATIO', True)
         self.pad_to_square = getattr(config, 'PAD_TO_SQUARE', True)
+        self.enable_quality_enhancement = getattr(config, 'ENABLE_QUALITY_ENHANCEMENT', False)
+        self.normalize_method = getattr(config, 'NORMALIZE_METHOD', 'standard')
+
+    @tf.function
+    def resize_pad(self, image, target_size):
+        th, tw = target_size
+        return tf.image.resize_with_pad(image, th, tw, antialias=True)
 
     @tf.function
     def normalize_image(self, image: tf.Tensor, method: str = 'standard') -> tf.Tensor:
@@ -42,179 +61,89 @@ class DataPreprocessor:
         else:
             # Default: [0, 1] with saturation
             image = tf.clip_by_value(image, 0.0, 1.0)
-            
         return image
 
     @tf.function
     def smart_resize(self, image: tf.Tensor, size: Optional[Tuple[int, int]] = None) -> tf.Tensor:
         """Smart resize with aspect ratio preservation and padding options."""
-        target_size = size or self.config.IMG_SIZE
-        target_h, target_w = target_size
+        target_h, target_w = size or (self._target_h, self._target_w)
         
         if self.preserve_aspect_ratio:
-            # Get original dimensions
-            original_shape = tf.shape(image)
-            orig_h = tf.cast(original_shape[0], tf.float32)
-            orig_w = tf.cast(original_shape[1], tf.float32)
-            
-            # Calculate scale factor
-            scale_h = tf.cast(target_h, tf.float32) / orig_h
-            scale_w = tf.cast(target_w, tf.float32) / orig_w
-            scale = tf.minimum(scale_h, scale_w)
-            
-            # Calculate new dimensions
-            new_h = tf.cast(orig_h * scale, tf.int32)
-            new_w = tf.cast(orig_w * scale, tf.int32)
-            
-            # Resize maintaining aspect ratio
-            image = tf.image.resize(image, [new_h, new_w], antialias=True)
+            image = tf.image.resize_with_pad(image, target_h, target_w, antialias=True)
             
             if self.pad_to_square:
-                # Pad to target size
                 image = tf.image.resize_with_crop_or_pad(image, target_h, target_w)
         else:
-            # Standard resize (may distort aspect ratio)
-            image = tf.image.resize(image, target_size, antialias=True)
+            image = tf.image.resize(image, [target_h, target_w], antialias=True)
             
         return image
-
-    @tf.function 
-    def process_bbox_advanced(self, bbox: tf.Tensor, original_shape: tf.Tensor, 
-                            target_shape: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
-        """Advanced bbox processing with proper coordinate transformation.
-        
-        Args:
-            bbox: BBoxFeature tensor with shape (4,) in format [ymin, xmin, ymax, xmax]
-            original_shape: Original image shape [H, W, C]
-            target_shape: Target image shape [H, W]
-        
-        Returns:
-            Tuple of (normalized_bbox, absolute_bbox)
-        """
-        # Input bbox format from Oxford Pet: [ymin, xmin, ymax, xmax] (normalized 0-1)
+    
+    @tf.function
+    def _transform_bbox(self,
+                        bbox: tf.Tensor,
+                        orig_shape: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+        """Transform bbox from original to target image."""
         ymin, xmin, ymax, xmax = tf.unstack(bbox)
-        
-        # Convert to [xmin, ymin, xmax, ymax] format for consistency
-        bbox_reordered = tf.stack([xmin, ymin, xmax, ymax])
-        
-        # Get dimensions
-        orig_h = tf.cast(original_shape[0], tf.float32)
-        orig_w = tf.cast(original_shape[1], tf.float32)
-        target_h = tf.cast(target_shape[0], tf.float32)
-        target_w = tf.cast(target_shape[1], tf.float32)
-        
-        # Convert normalized coordinates to absolute in original image
-        bbox_abs_orig = bbox_reordered * tf.stack([orig_w, orig_h, orig_w, orig_h])
-        
-        # Calculate scaling factors for resize transformation
-        if self.preserve_aspect_ratio:
-            # Calculate scale factor (same as in smart_resize)
-            scale_h = target_h / orig_h
-            scale_w = target_w / orig_w
-            scale = tf.minimum(scale_h, scale_w)
-            
-            # New dimensions after resize
-            new_h = orig_h * scale
-            new_w = orig_w * scale
-            
-            # Calculate padding offsets if pad_to_square is enabled
-            if self.pad_to_square:
-                pad_top = (target_h - new_h) / 2.0
-                pad_left = (target_w - new_w) / 2.0
-            else:
-                pad_top = 0.0
-                pad_left = 0.0
-                target_h = new_h
-                target_w = new_w
-            
-            # Transform bbox coordinates
-            xmin_scaled = bbox_abs_orig[0] * scale + pad_left
-            ymin_scaled = bbox_abs_orig[1] * scale + pad_top
-            xmax_scaled = bbox_abs_orig[2] * scale + pad_left
-            ymax_scaled = bbox_abs_orig[3] * scale + pad_top
-        else:
-            # Simple scaling without aspect ratio preservation
-            scale_w = target_w / orig_w
-            scale_h = target_h / orig_h
-            
-            xmin_scaled = bbox_abs_orig[0] * scale_w
-            ymin_scaled = bbox_abs_orig[1] * scale_h
-            xmax_scaled = bbox_abs_orig[2] * scale_w
-            ymax_scaled = bbox_abs_orig[3] * scale_h
-        
-        bbox_transformed = tf.stack([xmin_scaled, ymin_scaled, xmax_scaled, ymax_scaled])
-        
-        # Normalize to [0, 1] for target image
-        bbox_normalized = bbox_transformed / tf.stack([target_w, target_h, target_w, target_h])
-        bbox_normalized = tf.clip_by_value(bbox_normalized, 0.0, 1.0)
-        
-        return bbox_normalized, bbox_transformed
+
+        orig_h = tf.cast(orig_shape[0], tf.float32)
+        orig_w = tf.cast(orig_shape[1], tf.float32)
+        tgt_h  = tf.cast(self._target_h, tf.float32)
+        tgt_w  = tf.cast(self._target_w, tf.float32)
+
+        # scale + pad (same as smart_resize)
+        scale = tf.minimum(tgt_h / orig_h, tgt_w / orig_w)
+        new_h = orig_h * scale
+        new_w = orig_w * scale
+        pad_top  = (tgt_h - new_h) / 2.0
+        pad_left = (tgt_w - new_w) / 2.0
+
+        # absolute coordinates (original image)
+        x1 = xmin * orig_w
+        y1 = ymin * orig_h
+        x2 = xmax * orig_w
+        y2 = ymax * orig_h
+
+        # scale + pad (same as smart_resize)
+        x1_s = x1 * scale + pad_left
+        y1_s = y1 * scale + pad_top
+        x2_s = x2 * scale + pad_left
+        y2_s = y2 * scale + pad_top
+
+        bbox_abs = tf.stack([x1_s, y1_s, x2_s, y2_s])
+        bbox_nrm = bbox_abs / tf.stack([tgt_w, tgt_h, tgt_w, tgt_h])
+        bbox_nrm = tf.clip_by_value(bbox_nrm, 0.0, 1.0)
+        return bbox_nrm, bbox_abs
+
 
     @tf.function
-    def process_segmentation_mask_advanced(self, mask: tf.Tensor, target_size: Optional[Tuple[int, int]] = None) -> tf.Tensor:
-        """Enhanced segmentation mask processing for Oxford Pet dataset.
-        
-        Args:
-            mask: Segmentation mask with shape (H, W, 1) and dtype uint8
-            target_size: Target size for resizing
-            
-        Returns:
-            Processed mask with shape (target_H, target_W)
-        """
-        target_size = target_size or self.config.IMG_SIZE
-        
-        # Remove channel dimension if present
-        if len(mask.shape) == 3 and mask.shape[-1] == 1:
-            mask = tf.squeeze(mask, axis=-1)
-        
-        # Convert to float32 for processing
+    def process_segmentation_mask(self,
+                                  mask: tf.Tensor,
+                                  target_size: Optional[Tuple[int, int]] = None
+                                  ) -> tf.Tensor:
+        """Resize mask (nearest), normalize to 0/1/2."""
+        th, tw = target_size or (self._target_h, self._target_w)
+
+        # ensure 2-D
+        if mask.shape.rank == 3 and mask.shape[-1] == 1:
+            mask = tf.squeeze(mask, -1)
+
+        mask = tf.image.resize_with_pad(mask[..., tf.newaxis],
+                                        th, tw,
+                                        method='nearest')
+        mask = tf.squeeze(mask, -1)
+
+        # Ensure mask is float32 for subsequent comparison and scaling
         mask = tf.cast(mask, tf.float32)
-        
-        # Oxford Pet dataset segmentation masks:
-        # - 1: Foreground (pet)
-        # - 2: Background  
-        # - 3: Border/boundary (between foreground and background)
-        
-        # Resize with nearest neighbor to preserve class boundaries
-        mask_resized = tf.image.resize(
-            tf.expand_dims(mask, -1), 
-            target_size, 
-            method='nearest'
-        )
-        mask_resized = tf.squeeze(mask_resized, -1)
-        
-        # Normalize values to expected range
-        # Check if mask values are in [0, 255] range and normalize if needed
-        max_val = tf.reduce_max(mask_resized)
-        mask_normalized = tf.cond(
-            max_val > 10.0,  # Assume values > 10 are in [0, 255] range
-            lambda: mask_resized / 255.0 * 3.0,  # Scale to [0, 3]
-            lambda: mask_resized
-        )
-        
-        # Ensure values are in [1, 2, 3] range
-        mask_normalized = tf.clip_by_value(mask_normalized, 1.0, 3.0)
-        
-        # Convert to [0, 1, 2] for easier processing
-        # 0: Background, 1: Foreground, 2: Boundary
-        mask_processed = mask_normalized - 1.0
-        
-        # Apply slight smoothing to boundary regions for better training
-        boundary_mask = tf.equal(tf.cast(mask_processed, tf.int32), 2)
-        
-        # Smooth only boundary regions
-        mask_smooth = tf.nn.avg_pool2d(
-            tf.expand_dims(tf.expand_dims(mask_processed, 0), -1),
-            ksize=[1, 3, 3, 1],
-            strides=[1, 1, 1, 1],
-            padding='SAME'
-        )
-        mask_smooth = tf.squeeze(mask_smooth)
-        
-        # Use smoothed values only for boundary pixels
-        final_mask = tf.where(boundary_mask, mask_smooth, mask_processed)
-        
-        return tf.cast(final_mask, tf.float32)
+
+        # scale if original data is 8-bit
+        max_val = tf.reduce_max(mask)
+        mask = tf.cond(max_val > 3.0,
+                       lambda: mask / 255.0 * 3.0,
+                       lambda: mask)
+        mask = tf.clip_by_value(mask, 0.0, 3.0)  # 0-3
+        mask = mask - 1.0                         # 0:BG,1:FG,2:Border
+        return mask
+
 
     @tf.function
     def apply_quality_enhancement(self, image: tf.Tensor) -> tf.Tensor:
@@ -222,33 +151,20 @@ class DataPreprocessor:
         # Histogram equalization approximation
         image_eq = tf.image.adjust_contrast(image, contrast_factor=1.2)
         
-        # Sharpening filter
-        sharpen_kernel = tf.constant([
-            [0, -1, 0],
-            [-1, 5, -1], 
-            [0, -1, 0]
-        ], dtype=tf.float32)
-        sharpen_kernel = tf.reshape(sharpen_kernel, [3, 3, 1, 1])
-        
-        # Apply sharpening to each channel
-        channels = tf.unstack(image, axis=-1)
-        sharpened_channels = []
-        
-        for channel in channels:
-            channel_4d = tf.expand_dims(tf.expand_dims(channel, 0), -1)
-            sharpened = tf.nn.conv2d(channel_4d, sharpen_kernel, strides=[1,1,1,1], padding='SAME')
-            sharpened_channels.append(tf.squeeze(sharpened, [0, -1]))
-            
-        image_sharp = tf.stack(sharpened_channels, axis=-1)
-        
-        # Blend original and enhanced
-        alpha = 0.3
-        enhanced_image = alpha * image_sharp + (1 - alpha) * image_eq
-        
-        return tf.clip_by_value(enhanced_image, 0.0, 1.0)
+        # depth-wise conv
+        img4d = image_eq[tf.newaxis, ...]
+        sharp  = tf.nn.depthwise_conv2d(
+            img4d, 
+            _SHARP_KERNEL,
+            strides=[1, 1, 1, 1],
+            padding='SAME',
+        )
+
+        sharp = tf.squeeze(sharp, 0)
+        return tf.clip_by_value(sharp * 0.3 + image_eq * 0.7, 0.0, 1.0)
 
     @tf.function
-    def preprocess_sample_optimized(self, sample: Dict[str, Any]) -> Dict[str, tf.Tensor]:
+    def preprocess_sample(self, sample: Dict[str, Any]) -> Dict[str, tf.Tensor]:
         """Optimized preprocessing with better error handling and performance.
         
         Args:
@@ -265,26 +181,24 @@ class DataPreprocessor:
         """
         # Get original image dimensions
         original_shape = tf.shape(sample['image'])
-        target_shape = tf.constant(self.config.IMG_SIZE, dtype=tf.int32)
         
         # Process image with smart resizing
         image = self.smart_resize(sample['image'])
         
         # Apply quality enhancement if enabled
-        if getattr(self.config, 'ENABLE_QUALITY_ENHANCEMENT', False):
+        if self.enable_quality_enhancement:
             image = self.apply_quality_enhancement(image)
             
         # Normalize image
-        normalization_method = getattr(self.config, 'NORMALIZATION_METHOD', 'standard')
-        image = self.normalize_image(image, method=normalization_method)
+        image = self.normalize_image(image, self.normalize_method)
         
         # Process bounding box with advanced transformation
-        bbox_normalized, bbox_absolute = self.process_bbox_advanced(
-            sample['head_bbox'], original_shape, target_shape
+        bbox_normalized, bbox_absolute = self._transform_bbox(
+            sample['head_bbox'], original_shape
         )
         
         # Process segmentation mask
-        seg_mask = self.process_segmentation_mask_advanced(sample['segmentation_mask'])
+        seg_mask = self.process_segmentation_mask(sample['segmentation_mask'])
         
         # Validate bbox coordinates
         bbox_area = (bbox_normalized[2] - bbox_normalized[0]) * (bbox_normalized[3] - bbox_normalized[1])
@@ -297,33 +211,39 @@ class DataPreprocessor:
         # Create comprehensive output
         processed_sample = {
             'image': image,
-            'pet_class': pet_class,  # 37 breed classes
-            'species': species,      # 2 species classes
             'bbox': bbox_normalized,
-            'segmentation_mask': seg_mask,
             'bbox_absolute': bbox_absolute,
             'valid_bbox': valid_bbox,
+            'segmentation_mask': seg_mask,
+            'pet_class': pet_class,  # 37 breed classes
+            'species': species,      # 2 species classes
             'original_shape': tf.cast(original_shape, tf.float32),
-            'target_shape': tf.cast(target_shape, tf.float32),
+            'target_shape': self.img_size_float,
             'file_name': sample['file_name'],
         }
         
         return processed_sample
 
-    def create_detection_target_enhanced(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
-        """Enhanced detection targets with additional metadata."""
+
+    def _compute_bbox_area(self, bbox: tf.Tensor) -> tf.Tensor:
+            xmin, ymin, xmax, ymax = tf.unstack(bbox, axis=-1)
+            return (xmax - xmin) * (ymax - ymin)
+    
+
+    def create_detection_target(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
+        """Detection targets with additional metasrc.data."""
         image = processed_sample['image']
         targets = {
             'bbox': processed_sample['bbox'],
             'pet_class': processed_sample['pet_class'],
             'species': processed_sample['species'],
-            'valid': processed_sample['valid_bbox'],
+            'valid_bbox': processed_sample['valid_bbox'],  # Include valid_bbox
             'area': self._compute_bbox_area(processed_sample['bbox']),
         }
         return image, targets
 
-    def create_segmentation_target_enhanced(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
-        """Enhanced segmentation targets with class weights."""
+    def create_segmentation_target(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
+        """Segmentation targets with additional metasrc.data."""
         image = processed_sample['image']
         mask = processed_sample['segmentation_mask']
         
@@ -346,20 +266,20 @@ class DataPreprocessor:
         }
         return image, targets
 
-    def create_multitask_target_enhanced(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
-        """Enhanced multitask targets with comprehensive metadata."""
+    def create_multitask_target(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
+        """Multitask targets with comprehensive metasrc.data."""
         image = processed_sample['image']
         targets = {
             'bbox': processed_sample['bbox'],
             'pet_class': processed_sample['pet_class'],
             'species': processed_sample['species'],
             'segmentation_mask': processed_sample['segmentation_mask'],
-            'valid_bbox': processed_sample['valid_bbox'],
+            'valid_bbox': processed_sample['valid_bbox'],  # Include valid_bbox
             'bbox_area': self._compute_bbox_area(processed_sample['bbox']),
         }
         return image, targets
 
-    def create_classification_target_enhanced(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
+    def create_classification_target(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
         """Create targets for classification-only tasks."""
         image = processed_sample['image']
         targets = {
@@ -368,24 +288,18 @@ class DataPreprocessor:
         }
         return image, targets
 
-    @tf.function
-    def _compute_bbox_area(self, bbox: tf.Tensor) -> tf.Tensor:
-        """Compute normalized bbox area."""
-        xmin, ymin, xmax, ymax = tf.unstack(bbox, axis=-1)
-        return (xmax - xmin) * (ymax - ymin)
-
-    def _format_for_task_enhanced(self, processed_sample: Dict[str, tf.Tensor], task: str):
-        """Enhanced task formatting with better target structure."""
+    def _format_for_task(self, processed_sample: Dict[str, tf.Tensor], task: str):
+        """Task formatting with better target structure."""
         if task == "detection":
-            return self.create_detection_target_enhanced(processed_sample)
+            return self.create_detection_target(processed_sample)
         elif task == "segmentation":
-            return self.create_segmentation_target_enhanced(processed_sample)
+            return self.create_segmentation_target(processed_sample)
         elif task == "classification":
-            return self.create_classification_target_enhanced(processed_sample)
+            return self.create_classification_target(processed_sample)
         else:  # multitask
-            return self.create_multitask_target_enhanced(processed_sample)
+            return self.create_multitask_target(processed_sample)
 
-    def prepare_dataset_optimized(
+    def prepare_dataset(
         self,
         ds: tf.data.Dataset,
         batch_size: int,
@@ -410,10 +324,6 @@ class DataPreprocessor:
         options.experimental_deterministic = getattr(self.config, 'DETERMINISTIC', False)
         ds = ds.with_options(options)
         
-        # Early caching of raw data if specified
-        if cache_filename:
-            ds = ds.cache(cache_filename)
-        
         # Shuffle before preprocessing for better randomization
         if shuffle:
             ds = ds.shuffle(
@@ -426,47 +336,53 @@ class DataPreprocessor:
         if repeat:
             ds = ds.repeat()
         
+        # Take a sample to understand the structure
+        # sample_elem = next(iter(ds.take(1)))
+        # print("Sample element type:", type(sample_elem))
+        # if isinstance(sample_elem, dict):
+        #     print("Sample keys:", list(sample_elem.keys()))
+        # else:
+        #     print("Sample structure:", sample_elem)
+        
+        def _proc(sample):
+            """Process a single sample from the dataset."""
+            # Ensure sample is a dictionary with expected keys
+            if not isinstance(sample, dict):
+                raise TypeError(f"Expected sample to be a dict, got {type(sample)}")
+            
+            required_keys = ['image', 'head_bbox', 'segmentation_mask', 'label', 'species', 'file_name']
+            missing_keys = [key for key in required_keys if key not in sample]
+            if missing_keys:
+                raise KeyError(f"Missing required keys in sample: {missing_keys}")
+            
+            processed = self.preprocess_sample(sample)
+            return self._format_for_task(processed, task)
+        
         # Preprocessing with optimized parallelization
         ds = ds.map(
-            lambda s: self._format_for_task_enhanced(
-                self.preprocess_sample_optimized(s), task
-            ),
+            _proc,
             num_parallel_calls=tf.data.AUTOTUNE,
             deterministic=False,
         )
+
+        # print("Dataset element spec after preprocessing:")
+        # print(ds.element_spec)
         
-        # Filter out invalid samples (mainly for detection tasks)
-        def is_valid_sample(image, targets):
-            if task == "detection" or task == "multitask":
-                return targets.get('valid_bbox', True)
-            return True  # Segmentation and classification samples are always valid
+        # Only filter for valid_bbox if the task includes bbox information
+        # This must be done BEFORE caching and batching
+        if task in ('detection', 'multitask'):
+            ds = ds.filter(lambda img, targets: targets['valid_bbox'])
         
-        ds = ds.filter(is_valid_sample)
-        
-        # Batching with padding for variable-size elements
-        padded_shapes = self._get_padded_shapes(task)
-        if padded_shapes:
-            ds = ds.padded_batch(
-                batch_size,
-                padded_shapes=padded_shapes,
-                drop_remainder=True
-            )
+        # Post-processing cache (after filtering but before batching)
+        if cache_filename:  # Only cache in memory if not caching to file
+            ds = ds.cache(cache_filename)
         else:
-            ds = ds.batch(batch_size, drop_remainder=True)
-        
-        # Post-processing cache (after batching)
-        if not cache_filename:  # Only cache in memory if not caching to file
             ds = ds.cache()
         
         # Prefetch for pipeline optimization
+        ds = ds.batch(batch_size, drop_remainder=True)
         ds = ds.prefetch(tf.data.AUTOTUNE)
-        
         return ds
-
-    def _get_padded_shapes(self, task: str) -> Optional[Tuple]:
-        """Get padded shapes for variable-size batching if needed."""
-        # For Oxford Pet dataset, shapes are usually fixed after preprocessing
-        return None
 
     def create_validation_dataset(
         self,
@@ -475,7 +391,7 @@ class DataPreprocessor:
         task: str = "detection",
     ) -> tf.data.Dataset:
         """Create optimized validation dataset without augmentation."""
-        return self.prepare_dataset_optimized(
+        return self.prepare_dataset(  # Fixed method name
             ds=ds,
             batch_size=batch_size,
             shuffle=False,  # No shuffling for validation
@@ -491,7 +407,7 @@ class DataPreprocessor:
         cache_filename: Optional[str] = None,
     ) -> tf.data.Dataset:
         """Create optimized training dataset with full preprocessing."""
-        return self.prepare_dataset_optimized(
+        return self.prepare_dataset(
             ds=ds,
             batch_size=batch_size,
             shuffle=True,
@@ -508,53 +424,52 @@ class DataPreprocessor:
             'bbox_areas': [],
             'pet_class_distribution': {},
             'species_distribution': {},
-            'segmentation_class_distribution': {'background': 0, 'foreground': 0, 'boundary': 0},
+            'segmentation_class_distribution': {
+                'background': 0, 
+                'foreground': 0, 
+                'boundary': 0,
+            },
         }
         
         sample_count = 0
-        for batch in ds.take(num_samples // 32):  # Assuming batch_size=32
-            if isinstance(batch, tuple):
-                images, targets = batch
+        for images, targets in ds.take(num_samples // 32):  # Assuming batch_size=32              
+            # Image statistics
+            batch_mean = tf.reduce_mean(images, axis=[0, 1, 2])
+            batch_std = tf.math.reduce_std(images, axis=[0, 1, 2])
+            stats['mean_pixel_values'].append(batch_mean.numpy())
+            stats['std_pixel_values'].append(batch_std.numpy())
                 
-                # Image statistics
-                batch_mean = tf.reduce_mean(images, axis=[0, 1, 2])
-                batch_std = tf.math.reduce_std(images, axis=[0, 1, 2])
-                stats['mean_pixel_values'].append(batch_mean.numpy())
-                stats['std_pixel_values'].append(batch_std.numpy())
+            # Bbox statistics if available
+            if 'bbox' in targets:
+                areas = self._compute_bbox_area(targets['bbox'])
+                stats['bbox_areas'].extend(areas.numpy().tolist())
                 
-                # Bbox statistics if available
-                if 'bbox' in targets:
-                    areas = self._compute_bbox_area(targets['bbox'])
-                    stats['bbox_areas'].extend(areas.numpy().tolist())
+            # Pet class distribution
+            if 'pet_class' in targets:
+                for lbl in targets['pet_class'].numpy():
+                    stats['pet_class_distribution'][int(lbl)] = \
+                        stats['pet_class_distribution'].get(int(lbl), 0) + 1
+                    
+            # Species distribution
+            if 'species' in targets:
+                for s in targets['species'].numpy():
+                    stats['species_distribution'][int(s)] = \
+                        stats['species_distribution'].get(int(s), 0) + 1
                 
-                # Pet class distribution
-                if 'pet_class' in targets:
-                    labels = targets['pet_class'].numpy()
-                    for label in labels:
-                        stats['pet_class_distribution'][int(label)] = stats['pet_class_distribution'].get(int(label), 0) + 1
-                
-                # Species distribution
-                if 'species' in targets:
-                    species = targets['species'].numpy()
-                    for s in species:
-                        stats['species_distribution'][int(s)] = stats['species_distribution'].get(int(s), 0) + 1
-                
-                # Segmentation mask statistics
-                if 'mask' in targets:
-                    masks = targets['mask'].numpy()
-                    for mask in masks:
-                        stats['segmentation_class_distribution']['background'] += np.sum(mask == 0)
-                        stats['segmentation_class_distribution']['foreground'] += np.sum(mask == 1)
-                        stats['segmentation_class_distribution']['boundary'] += np.sum(mask == 2)
+            # Segmentation mask statistics
+            if 'mask' in targets:
+                for mask in targets['mask'].numpy():
+                    stats['segmentation_class_distribution']['background'] += np.sum(mask == 0)
+                    stats['segmentation_class_distribution']['foreground'] += np.sum(mask == 1)
+                    stats['segmentation_class_distribution']['boundary'] += np.sum(mask == 2)
                         
-                sample_count += len(images)
-                if sample_count >= num_samples:
-                    break
+            sample_count += images.shape[0]
+            if sample_count >= num_samples:
+                break
         
         # Aggregate statistics
-        if stats['mean_pixel_values']:
-            stats['mean_pixel_values'] = np.mean(stats['mean_pixel_values'], axis=0)
-            stats['std_pixel_values'] = np.mean(stats['std_pixel_values'], axis=0)
+        stats['mean_pixel_values'] = np.mean(stats['mean_pixel_values'], axis=0)
+        stats['std_pixel_values'] = np.mean(stats['std_pixel_values'], axis=0)
         
         return stats
 

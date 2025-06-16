@@ -51,7 +51,8 @@ def save_json(obj: Any, path: str | pathlib.Path) -> None:
     """
     p = _prepare_path(path)
     with p.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False)
+        # Ensure objects like pathlib.Path are serialized as strings
+        json.dump(obj, f, indent=2, ensure_ascii=False, default=str)
 
 
 def load_json(path: str | pathlib.Path) -> Any:

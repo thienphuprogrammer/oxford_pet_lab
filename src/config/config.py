@@ -1,4 +1,4 @@
-# config/config.py
+# config/src.config.py
 import os
 from pathlib import Path
 from dataclasses import dataclass
@@ -14,8 +14,8 @@ class Config:
     # ------------------------------------------------------------------
     # Project paths
     # ------------------------------------------------------------------
-    PROJECT_ROOT = Path(__file__).parent.parent
-    
+    PROJECT_ROOT = Path(__file__).parent.parent.parent
+        
     # ------------------------------------------------------------------
     # Project directories
     # ------------------------------------------------------------------
@@ -26,6 +26,8 @@ class Config:
     LOGS_DIR = RESULTS_DIR / "logs"
     PLOTS_DIR = RESULTS_DIR / "plots"
     PREDICTIONS_DIR = RESULTS_DIR / "predictions"
+    EXPERIMENTS_DIR = RESULTS_DIR / "experiments"
+    REPORT_DIR = RESULTS_DIR / 'reports'
     
     # Create directories if they don't exist
     for dir_path in [
@@ -35,11 +37,13 @@ class Config:
         MODELS_DIR, 
         LOGS_DIR, 
         PLOTS_DIR, 
-        PREDICTIONS_DIR
+        PREDICTIONS_DIR,
+        REPORT_DIR
     ]:
         dir_path.mkdir(parents=True, exist_ok=True)
     
     # Dataset configuration
+    DOWNLOAD = True
     DATASET_NAME = "oxford_iiit_pet"
     DATASET_VERSION = "4.0.0"
 
@@ -75,6 +79,19 @@ class Config:
     FIGURE_SIZE = (12, 8)
     DPI = 100
 
+    # GPU configuration
+    GPU_MEMORY_GROWTH = True
+    MIXED_PRECISION = True
+
+    USE_IMAGENET_NORM = True
+    PRESERVE_ASPECT_RATIO = True
+    ENABLE_QUALITY_ENHANCEMENT = True
+    NORMALIZATION_METHOD = "imagenet"
+
+    # Model 
+    BACKBONE = 'resnet50'
+
+    PRETRAINED = True
 
     @classmethod
     def setup_gpu(cls):
@@ -93,16 +110,16 @@ class Config:
     def create_directories(cls):
         """Create necessary directories"""
         directories = [
-            cls.MODEL_DIR,
-            cls.CHECKPOINT_DIR,
-            cls.LOG_DIR,
+            cls.MODELS_DIR,
+            cls.LOGS_DIR,
             cls.PLOTS_DIR,
-            "results/predictions",
-            "experiments/detection/with_pretrained",
-            "experiments/detection/without_pretrained",
-            "experiments/segmentation/with_pretrained",
-            "experiments/segmentation/without_pretrained",
-            "experiments/multitask"
+            cls.PREDICTIONS_DIR,
+            cls.EXPERIMENTS_DIR,
+            cls.EXPERIMENTS_DIR / "detection/with_pretrained",
+            cls.EXPERIMENTS_DIR / "detection/without_pretrained",
+            cls.EXPERIMENTS_DIR / "segmentation/with_pretrained",
+            cls.EXPERIMENTS_DIR / "segmentation/without_pretrained",
+            cls.EXPERIMENTS_DIR / "multitask"
         ]
         
         for directory in directories:

@@ -447,107 +447,107 @@ def demo_usage():
     }
 
 
-# Updated OPTIMAL_CONFIGS with detection and segmentation
-OPTIMAL_CONFIGS.update({
-    'yolo_detection': {
-        'optimizer': 'sgd',
-        'learning_rate': 0.01,
-        'momentum': 0.937,
-        'weight_decay': 0.0005,
-        'lr_schedule': {
-            'type': 'cosine_restarts',
-            'params': {
-                'first_decay_steps': 3000,
-                't_mul': 2.0,
-                'alpha': 0.01
-            }
-        }
-    },
-    'detr_detection': {
-        'optimizer': 'adamw',
-        'learning_rate': 0.0001,
-        'weight_decay': 0.0001,
-        'lr_schedule': {
-            'type': 'warmup',
-            'params': {
-                'warmup_steps': 500,
-                'warmup_method': 'linear',
-                'decay_type': 'cosine',
-                'decay_steps': 50000
-            }
-        }
-    },
-    'unet_segmentation': {
-        'optimizer': 'adam',
-        'learning_rate': 0.001,
-        'weight_decay': 0.0001,
-        'lr_schedule': {
-            'type': 'polynomial',
-            'params': {
-                'decay_steps': 10000,
-                'end_learning_rate': 0.00001,
-                'power': 0.9
-            }
-        }
-    },
-    'deeplab_segmentation': {
-        'optimizer': 'sgd',
-        'learning_rate': 0.007,
-        'momentum': 0.9,
-        'weight_decay': 0.0001,
-        'lr_schedule': {
-            'type': 'polynomial',
-            'params': {
-                'decay_steps': 20000,
-                'end_learning_rate': 0.0007,
-                'power': 0.9
-            }
-        }
-    }
-})
-OPTIMAL_CONFIGS = {
-    'vision_transformer': {
-        'optimizer': 'adamw',
-        'learning_rate': 0.001,
-        'weight_decay': 0.1,
-        'lr_schedule': {
-            'type': 'cosine_restarts',
-            'params': {
-                'first_decay_steps': 1000,
-                't_mul': 2.0,
-                'alpha': 0.01
-            }
-        }
-    },
-    'cnn_classification': {
-        'optimizer': 'sgdr',
-        'learning_rate': 0.1,
-        'momentum': 0.9,
-        'lr_schedule': {
-            'type': 'one_cycle',
-            'params': {
-                'total_steps': 10000,
-                'pct_start': 0.3,
-                'div_factor': 25.0
-            }
-        }
-    },
-    'object_detection': {
-        'optimizer': 'adamw',
-        'learning_rate': 0.0001,
-        'weight_decay': 0.05,
-        'clipnorm': 10.0,
-        'lr_schedule': {
-            'type': 'warmup',
-            'params': {
-                'warmup_steps': 1000,
-                'warmup_method': 'linear',
-                'decay_type': 'cosine',
-                'decay_steps': 20000
-            }
-        }
-    }
-}
+# # Updated OPTIMAL_CONFIGS with detection and segmentation
+# OPTIMAL_CONFIGS.update({
+#     'yolo_detection': {
+#         'optimizer': 'sgd',
+#         'learning_rate': 0.01,
+#         'momentum': 0.937,
+#         'weight_decay': 0.0005,
+#         'lr_schedule': {
+#             'type': 'cosine_restarts',
+#             'params': {
+#                 'first_decay_steps': 3000,
+#                 't_mul': 2.0,
+#                 'alpha': 0.01
+#             }
+#         }
+#     },
+#     'detr_detection': {
+#         'optimizer': 'adamw',
+#         'learning_rate': 0.0001,
+#         'weight_decay': 0.0001,
+#         'lr_schedule': {
+#             'type': 'warmup',
+#             'params': {
+#                 'warmup_steps': 500,
+#                 'warmup_method': 'linear',
+#                 'decay_type': 'cosine',
+#                 'decay_steps': 50000
+#             }
+#         }
+#     },
+#     'unet_segmentation': {
+#         'optimizer': 'adam',
+#         'learning_rate': 0.001,
+#         'weight_decay': 0.0001,
+#         'lr_schedule': {
+#             'type': 'polynomial',
+#             'params': {
+#                 'decay_steps': 10000,
+#                 'end_learning_rate': 0.00001,
+#                 'power': 0.9
+#             }
+#         }
+#     },
+#     'deeplab_segmentation': {
+#         'optimizer': 'sgd',
+#         'learning_rate': 0.007,
+#         'momentum': 0.9,
+#         'weight_decay': 0.0001,
+#         'lr_schedule': {
+#             'type': 'polynomial',
+#             'params': {
+#                 'decay_steps': 20000,
+#                 'end_learning_rate': 0.0007,
+#                 'power': 0.9
+#             }
+#         }
+#     }
+# })
+# OPTIMAL_CONFIGS = {
+#     'vision_transformer': {
+#         'optimizer': 'adamw',
+#         'learning_rate': 0.001,
+#         'weight_decay': 0.1,
+#         'lr_schedule': {
+#             'type': 'cosine_restarts',
+#             'params': {
+#                 'first_decay_steps': 1000,
+#                 't_mul': 2.0,
+#                 'alpha': 0.01
+#             }
+#         }
+#     },
+#     'cnn_classification': {
+#         'optimizer': 'sgdr',
+#         'learning_rate': 0.1,
+#         'momentum': 0.9,
+#         'lr_schedule': {
+#             'type': 'one_cycle',
+#             'params': {
+#                 'total_steps': 10000,
+#                 'pct_start': 0.3,
+#                 'div_factor': 25.0
+#             }
+#         }
+#     },
+#     'object_detection': {
+#         'optimizer': 'adamw',
+#         'learning_rate': 0.0001,
+#         'weight_decay': 0.05,
+#         'clipnorm': 10.0,
+#         'lr_schedule': {
+#             'type': 'warmup',
+#             'params': {
+#                 'warmup_steps': 1000,
+#                 'warmup_method': 'linear',
+#                 'decay_type': 'cosine',
+#                 'decay_steps': 20000
+#             }
+#         }
+#     }
+# }
 
 
 class DetectionOptimizer:

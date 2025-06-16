@@ -20,8 +20,9 @@ class SimpleDetectionModel(BaseDetectionModel):
         super().__init__(num_classes, **kwargs)
         self.config = config or Config()
         self.models_config = models_config or ModelConfigs()
-        self.model_type = 'simple_detection_model'
+        self.backbone_name = self.config.BACKBONE
         self._init_params()
+
         self.backbone = self._build_backbone()
         self.head = self._build_detection_head()
         self.classification_head = self._build_classification_head()
@@ -29,8 +30,7 @@ class SimpleDetectionModel(BaseDetectionModel):
 
     def _init_params(self):
         """Initialize parameters"""
-        params_model = self.models_config.DETECTION_MODELS[self.model_type]
-        self.backbone_name = params_model.get('backbone_name', 'resnet50')
+        params_model = self.models_config.DETECTION_MODELS[self.backbone_name]
         self.backbone_units = params_model.get('backbone_units', [64, 128, 256, 512])
         self.detection_head_units = params_model.get('detection_head_units', [256, 128, 64])
         self.classification_head_units = params_model.get('classification_head_units', [256, 128, 64])
@@ -208,20 +208,22 @@ class PretrainedDetectionModel(BaseDetectionModel):
         super().__init__(num_classes, **kwargs)
         self.config = config or Config()
         self.models_config = models_config or ModelConfigs()
-        self.model_type = 'pretrained_detection_model'
+        self.backbone_name = self.config.BACKBONE
         self._init_params()
         
         self.backbone = self._build_backbone()
+        # Build BiFPN neck for feature fusion
+        self.bifpn = self._build_bifpn()
         self.detection_head = self._build_detection_head()
         self.classification_head = self._build_classification_head()
 
     def _init_params(self):
         """Initialize parameters"""
-        params_model = self.models_config.DETECTION_MODELS[self.model_type]
-        self.backbone_name = params_model.get('backbone_name', 'resnet50')
+        params_model = self.models_config.DETECTION_MODELS[self.backbone_name]
         self.pretrained = params_model.get('pretrained', True)
         self.pretrained_weights = params_model.get('pretrained_weights', 'imagenet') if self.pretrained else None
         self.input_shape = params_model.get('input_shape', (224, 224, 3))
+        
 
     def _build_backbone(self):
         """Build the backbone of the model."""
@@ -330,7 +332,6 @@ class PretrainedDetectionModel(BaseDetectionModel):
         
         return detection_head
     
-        
     def _build_classification_head(self):
         """Build classification head for multi-scale features"""
         def classification_head(features):
@@ -376,7 +377,7 @@ class YOLOv5InspiredModel(BaseDetectionModel):
         super().__init__(num_classes, **kwargs)
         self.config = config or Config()
         self.models_config = models_config or ModelConfigs()
-        self.model_type = 'yolo_inspired_model'
+        self.backbone_name = self.config.BACKBONE
         self._init_params()
         
         # Darknet-like backbone
@@ -387,10 +388,11 @@ class YOLOv5InspiredModel(BaseDetectionModel):
 
     def _init_params(self):
         """Initialize parameters"""
-        params_model = self.models_config.DETECTION_MODELS[self.model_type]
+        params_model = self.models_config.DETECTION_MODELS[self.backbone_name]
         self.backbone_name = params_model.get('backbone_name', 'resnet50')
         self.pretrained = params_model.get('pretrained', True)
         self.pretrained_weights = params_model.get('pretrained_weights', 'imagenet') if self.pretrained else None
+        
         self.input_shape = params_model.get('input_shape', (224, 224, 3))
         
     def _build_csp_backbone(self):

@@ -1,10 +1,13 @@
 __all__ = [
     'Trainer',
-    'EarlyStopping',
-    'ModelCheckpoint',
-    'LearningRateScheduler',
-    'ProgressLogger',
-    'MultiTaskMetricsLogger',
+    'AdaptiveEarlyStopping',
+    'WarmupCosineScheduler',
+    'AdvancedModelCheckpoint',
+    'MetricsLogger',
+    'ClassificationCallbacks',
+    'SegmentationCallbacks',
+    'GradientClippingCallback',
+    'get_optimized_callbacks',
     'DetectionMetrics',
     'SegmentationMetrics',
     'MultiTaskMetrics',
@@ -12,10 +15,13 @@ __all__ = [
 
 from .trainer import Trainer
 from .callbacks import (
-    EarlyStopping,
-    ModelCheckpoint,
-    LearningRateScheduler,
-    ProgressLogger,
-    MultiTaskMetricsLogger,
+    AdaptiveEarlyStopping,
+    WarmupCosineScheduler,
+    AdvancedModelCheckpoint,
+    MetricsLogger,
+    ClassificationCallbacks,
+    SegmentationCallbacks,
+    GradientClippingCallback,
+    get_optimized_callbacks,
 )
 from .metrics import DetectionMetrics, SegmentationMetrics, MultiTaskMetrics

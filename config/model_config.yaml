@@ -44,6 +44,7 @@ metrics_configs:
   segmentation:
     metrics_type: unified_segmentation
     metrics: [dice, pixel_accuracy, mean_iou]
+    
 
 callbacks_configs:
   detection:
@@ -54,6 +55,8 @@ callbacks_configs:
     gradient_clipping: true
     clip_norm: 1.0
     use_tensorboard: true
+    monitor_metric: val_mAP
+    
   segmentation:
     callbacks_type: unified_segmentation
     early_stopping_patience: 20
@@ -62,6 +65,7 @@ callbacks_configs:
     gradient_clipping: true
     clip_norm: 0.5
     use_tensorboard: true
+    monitor_metric: val_dice_coefficient
 
 tensorboard_configs:
   detection:
@@ -72,7 +76,7 @@ tensorboard_configs:
 detection_models:  
   resnet50:
     backbone: ResNet50
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     pretrained_weights: imagenet
     freeze_backbone: false
     detection_head_units: [256, 128, 64]
@@ -81,7 +85,7 @@ detection_models:
 
   mobilenetv2:
     backbone: MobileNetV2
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     pretrained_weights: imagenet
     freeze_backbone: false
     detection_head_units: [256, 128, 64]
@@ -90,7 +94,7 @@ detection_models:
 
   efficientnetb0:
     backbone: EfficientNetB0
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     pretrained_weights: imagenet
     freeze_backbone: false
     detection_head_units: [256, 128, 64]
@@ -100,7 +104,7 @@ detection_models:
 segmentation_models:
   pretrained_unet:
     backbone: EfficientNetV2B0
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     pretrained_weights: imagenet
     pretrained: true
     freeze_backbone: false
@@ -112,7 +116,7 @@ segmentation_models:
 
   unet3plus:
     backbone: EfficientNetV2B0
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     pretrained_weights: imagenet
     pretrained: true
     freeze_backbone: false
@@ -123,7 +127,7 @@ segmentation_models:
 
   transunet:
     backbone: ResNet50
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     pretrained_weights: imagenet
     freeze_backbone: false
     encoder_filters_cnn: [64, 128]
@@ -135,7 +139,7 @@ segmentation_models:
 
   deeplabv3plus:
     backbone: ResNet50
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     pretrained_weights: imagenet
     freeze_backbone: false
     decoder_filters: [512, 256, 128, 64, 32]
@@ -145,7 +149,7 @@ segmentation_models:
 
 multitask_models:
   resnet50:
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     feature_dim: 2048
     pretrained_weights: imagenet
     freeze_backbone: false
@@ -166,7 +170,7 @@ multitask_models:
       classification: 1.0
 
   efficientnetb0:
-    input_shape: (224, 224, 3)
+    input_shape: [224, 224, 3]
     feature_dim: 1280
     pretrained_weights: imagenet
     freeze_backbone: false

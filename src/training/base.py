@@ -4,7 +4,6 @@ from dataclasses import dataclass, asdict
 import logging
 import time
 
-from tensorflow.keras.callbacks import Callback
 import tensorflow as tf
 from tensorflow.keras import mixed_precision
 
@@ -12,25 +11,13 @@ from pathlib import Path
 from src.config.config import Config
 from src.config.model_configs import ModelConfigs
 from src.models.base_model import BaseModel
-from src.training.trainer import TrainingState
-from src.training.losses import get_sota_loss_function, get_sota_optimizer_config
+from src.training.losses import get_sota_loss_function
+from src.training.optimizers import DetectionOptimizer
 from src.training.metrics import get_metrics
 from src.training.callbacks import get_optimized_callbacks
 from src.utils.file_utils import save_json, load_json
 from src.utils.plot_utils import plot_training_history
 
-
-
-class BaseOptimizedCallback(Callback, ABC):
-    """Base class for optimized callbacks with common utilities"""
-    
-    def __init__(self, verbose: int = 1):
-        super().__init__()
-        self.verbose = verbose
-        
-    def _safe_get_metric(self, logs: Dict, metric_name: str, default_value: float = 0.0) -> float:
-        """Safely get metric value from logs"""
-        return logs.get(metric_name, default_value) if logs else default_value
 
 
 
@@ -217,7 +204,11 @@ class BaseTrainer(ABC):
         
     def _setup_optimization(self):
         """Setup optimizer with enhanced configuration."""
-        self.optimizer = get_sota_optimizer_config(self.task_type, self.config)
+
+        self.optimizer = DetectionOptimizer(
+            model_type='retinanet',
+            backbone=self.backbone_name,
+        )
         
         # Gradient accumulation setup
         self.gradient_accumulation_steps = getattr(self.config, 'GRADIENT_ACCUMULATION_STEPS', 1)
@@ -226,20 +217,22 @@ class BaseTrainer(ABC):
     def _setup_loss_and_metrics(self):
         """Setup loss functions and metrics."""
         self.loss_fn = get_sota_loss_function(
-            self.models_config.LOSS_FUNCTIONS[self.task_type]
+            self.models_config.LOSS_CONFIGS[self.task_type]
         )
         self.metrics = get_metrics(
             self.task_type,
-            self.models_config.NUM_CLASSES[self.task_type]
+            self.config.NUM_CLASSES_DETECTION
         )
         
     def _setup_callbacks(self):
         """Setup training callbacks."""
+        pretrained = self.config.PRETRAINED
         self.callbacks = get_optimized_callbacks(
-            self.task_type,
-            self.backbone_name,
-            self.config,
-            self.models_config
+            task_type=self.task_type,
+            backbone_name=self.backbone_name,
+            pretrained=pretrained,
+            config=self.config,
+            model_config=self.models_config
         )
         
     def _setup_mixed_precision(self):
@@ -275,7 +268,8 @@ class BaseTrainer(ABC):
         epoch_start_time = time.time()
         
         # Reset metrics
-        self.metrics.reset_state()
+        for metric in self.metrics:
+            metric.reset_state()
         
         # Training phase
         train_metrics = self._run_training_phase(train_dataset)

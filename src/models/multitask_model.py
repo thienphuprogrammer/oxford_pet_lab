@@ -4,9 +4,9 @@ from tensorflow.keras.applications import ResNet50, EfficientNetB0
 from typing import Dict, Tuple, Optional
 
 from src.models.base_model import BaseMultitaskModel
-from models.detecttion.detection_model import PretrainedDetectionModel, SimpleDetectionModel
-from models.segmentation.segmentation_model import PretrainedUNet, SimpleUNet, DeepLabV3Plus
-from src.training.losses import DetectionLoss, MultiTaskLoss
+from src.models.detecttion.detection_model import PretrainedDetectionModel, SimpleDetectionModel
+from src.models.segmentation.segmentation_model import PretrainedUNet, DeepLabV3Plus
+from src.training.losses import UnifiedDetectionLoss, UnifiedSegmentationLoss
 from src.config import ModelConfigs, Config
 
 class MultitaskModel(BaseMultitaskModel):

@@ -14,7 +14,8 @@ dependencies = [
     "tensorflow-addons>=0.23.0",
     "tensorflow[and-cuda]>=2.19.0",
     "tensorflow-datasets>=4.9.9",
+    "matplotlib>=3.10.3",
 ]
 
-[tool.poetry]
-packages = [{include = "src"}]
+[tool.uv.sources]
+a2a = { path = "./src/", editable = true }

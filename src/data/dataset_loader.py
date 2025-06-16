@@ -24,10 +24,12 @@ class OxfordPetDatasetLoader:
     - Comprehensive dataset statistics
     """
     
-    def __init__(self, 
-                 data_dir: Optional[str] = None,
-                 download: bool = True,
-                 log_level: str = 'INFO'):
+    def __init__(
+        self, 
+        data_dir: Optional[str] = None,
+        download: bool = True,
+        log_level: str = 'INFO'
+        ):
         """
         Initialize the dataset loader.
         
@@ -41,7 +43,7 @@ class OxfordPetDatasetLoader:
         self.logger = logging.getLogger(__name__)
         
         # Configuration
-        self.dataset_name = 'oxford_iiit_pet:4.*.*'  # Use latest version
+        self.dataset_name = f'oxford_iiit_pet:4.*.*'  # Use latest version
         self.data_dir = data_dir
         self.download = download
         
@@ -224,9 +226,9 @@ class OxfordPetDatasetLoader:
             train_size = total_size - val_size - test_size
             
             # Create splits
-            all_data = all_data.shuffle(10000, seed=seed)
-            test_ds = all_data.take(test_size)
-            remaining = all_data.skip(test_size)
+            all_data = all_src.data.shuffle(10000, seed=seed)
+            test_ds = all_src.data.take(test_size)
+            remaining = all_src.data.skip(test_size)
             val_ds = remaining.take(val_size)
             train_ds = remaining.skip(val_size)
             

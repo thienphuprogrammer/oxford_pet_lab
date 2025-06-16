@@ -1,13 +1,28 @@
-from models.detecttion.detection_model import SimpleDetectionModel, PretrainedDetectionModel, YOLOv3Model
-from models.segmentation.segmentation_model import SimpleUNet, PretrainedUNet, DeepLabV3Plus
+from src.models.detecttion.detection_model import (
+  SimpleDetectionModel, 
+  PretrainedDetectionModel,
+  YOLOv5InspiredModel,
+  create_optimized_model,
+)
+from src.models.segmentation.segmentation_model import (
+  PretrainedUNet, 
+  DeepLabV3Plus,
+  UNet3Plus,
+  TransUNet,
+  create_segmentation_model
+)
 from src.models.multitask_model import MultitaskModel
 
 __all__ = [
   'SimpleDetectionModel', 
   'PretrainedDetectionModel', 
-  'YOLOv3Model', 
-  'SimpleUNet', 
+  'YOLOv5InspiredModel', 
   'PretrainedUNet', 
   'DeepLabV3Plus', 
+  'UNet3Plus',
+  'TransUNet',
+  'create_segmentation_model',
+  'create_optimized_model',
   'MultitaskModel'
 ]
+

@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import tensorflow as tf
 from tensorflow.keras.preprocessing.image import array_to_img
-from src.config.config import Config
+from src.src.config.config import Config
 
 class DataVisualizer:
     def __init__(self):

@@ -34,7 +34,11 @@ class Trainer(BaseTrainer):
         loss = self.loss_fn(targets, predictions)
         
         # Update metrics
-        self.metrics.update_state(targets, predictions)
+        if isinstance(self.metrics, list):
+            for metric in self.metrics:
+                metric.update_state(targets, predictions)
+        else:
+            self.metrics.update_state(targets, predictions)
         
         return {'loss': loss}
         
@@ -46,7 +50,11 @@ class Trainer(BaseTrainer):
         loss = self.loss_fn(masks, predictions)
         
         # Update metrics
-        self.metrics.update_state(masks, predictions)
+        if isinstance(self.metrics, list):
+            for metric in self.metrics:
+                metric.update_state(masks, predictions)
+        else:
+            self.metrics.update_state(masks, predictions)
         
         return {'loss': loss}
         
@@ -56,6 +64,13 @@ class Trainer(BaseTrainer):
         images, targets = batch
         predictions = self.model(images, training=False)
         loss = self.loss_fn(targets, predictions)
+        
+        # Update metrics
+        if isinstance(self.metrics, list):
+            for metric in self.metrics:
+                metric.update_state(targets, predictions)
+        else:
+            self.metrics.update_state(targets, predictions)
         
         return {'loss': loss}
         
