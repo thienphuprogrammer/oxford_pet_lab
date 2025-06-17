@@ -3,6 +3,19 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/checkpoints" />
+      <excludeFolder url="file://$MODULE_DIR$/data" />
+      <excludeFolder url="file://$MODULE_DIR$/experiments/detection/checkpoints" />
+      <excludeFolder url="file://$MODULE_DIR$/experiments/detection/logs" />
+      <excludeFolder url="file://$MODULE_DIR$/logs" />
+      <excludeFolder url="file://$MODULE_DIR$/results/checkpoints" />
+      <excludeFolder url="file://$MODULE_DIR$/results/debug_run/logs" />
+      <excludeFolder url="file://$MODULE_DIR$/results/experiments" />
+      <excludeFolder url="file://$MODULE_DIR$/results/logs" />
+      <excludeFolder url="file://$MODULE_DIR$/results/runs/latest/checkpoints" />
+      <excludeFolder url="file://$MODULE_DIR$/results/runs/latest/logs" />
+      <excludeFolder url="file://$MODULE_DIR$/src/results/experiments" />
+      <excludeFolder url="file://$MODULE_DIR$/src/results/logs" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.10 (oxford_pet_lab)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

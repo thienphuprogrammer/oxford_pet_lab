@@ -232,8 +232,17 @@ def main(argv: list[str] | None = None) -> None:
     )
     
     print(f"\n[INFO] Starting training – task={args.task} backbone={args.backbone} epochs={args.epochs}")
-    trainer.train(train_ds, val_ds, epochs=args.epochs)
-    
+    history = trainer.train(train_ds, val_ds, epochs=args.epochs)
+
+    # Save history
+    with (cfg.LOGS_DIR / f"{args.task}.json").open("w") as f:
+        json.dump(history.history, f, indent=4)
+
+    # Save model
+    weights_path, arch_path = trainer.save_model(args.task)
+    print(f"Model saved to: {weights_path}")
+    print(f"Model architecture saved to: {arch_path}")
+
     # Evaluate model
     evaluator = Evaluator(
         model=trainer.model,
@@ -250,7 +259,8 @@ def main(argv: list[str] | None = None) -> None:
     # Save all results
     result_manager = ResultManager()
     _save_results(result_manager, args, model, trainer, metrics, models_cfg)
-    
+
+
     print(f"\n[INFO] Finished – results saved to {args.output_dir}\n")
 
 if __name__ == "__main__":

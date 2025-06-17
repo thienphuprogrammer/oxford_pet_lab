@@ -680,8 +680,10 @@ class YOLOv5InspiredModel(BaseDetectionModel):
         
         # Combine multi-scale outputs
         if len(bbox_outputs) > 1:
-            bbox_output = tf.reduce_mean(tf.stack(bbox_outputs), axis=0)
-            class_output = tf.reduce_mean(tf.stack(class_outputs), axis=0)
+            # Average across scales without stacking to prevent shape mismatches
+            num_scales = tf.cast(len(bbox_outputs), bbox_outputs[0].dtype)
+            bbox_output = tf.add_n(bbox_outputs) / num_scales
+            class_output = tf.add_n(class_outputs) / num_scales
         else:
             bbox_output = bbox_outputs[0]
             class_output = class_outputs[0]
