@@ -49,49 +49,31 @@ class ModelConfigs:
         # to the hard-coded defaults defined below.
         yaml_cfg = self._load_yaml_config()
 
-        # ------------------------------------------------------------------
-        # Detection models configuration
-        # ------------------------------------------------------------------
+        # Default configurations
+        default_configs = {
+            "detection_models": {},
+            "segmentation_models": {},
+            "multitask_models": {},
+            "loss_configs": {},
+            "optimizer_configs": {},
+            "metrics_configs": {},
+            "callbacks_configs": {},
+            "tensorboard_configs": {}
+        }
 
-        if yaml_cfg and isinstance(yaml_cfg.get("detection_models"), dict):
-            # Entire sub-dict is stored directly so it preserves any defaults
-            # defined by the user.
-            self.DETECTION_MODELS = yaml_cfg["detection_models"]
-        else:
-            raise ValueError("Detection models configuration not found in YAML file")
-        
-        if yaml_cfg and isinstance(yaml_cfg.get("segmentation_models"), dict):
-            self.SEGMENTATION_MODELS = yaml_cfg["segmentation_models"]
-        else:
-            raise ValueError("Segmentation models configuration not found in YAML file")
-        
-        if yaml_cfg and isinstance(yaml_cfg.get("multitask_models"), dict):
-            self.MULTITASK_MODELS = yaml_cfg["multitask_models"]
-        else:
-            raise ValueError("Multitask models configuration not found in YAML file")
-        
-        if yaml_cfg and isinstance(yaml_cfg.get("loss_configs"), dict):
-            self.LOSS_CONFIGS = yaml_cfg["loss_configs"]
-        else:
-            raise ValueError("Loss functions configuration not found in YAML file")
-        
-        if yaml_cfg and isinstance(yaml_cfg.get("optimizer_configs"), dict):
-            self.OPTIMIZER_CONFIGS = yaml_cfg["optimizer_configs"]
-        else:
-            raise ValueError("Optimizer configuration not found in YAML file")
-        
-        if yaml_cfg and isinstance(yaml_cfg.get("metrics_configs"), dict):
-            self.METRICS_CONFIGS = yaml_cfg["metrics_configs"]
-        else:
-            raise ValueError("Metrics configuration not found in YAML file")
-        
-        if yaml_cfg and isinstance(yaml_cfg.get("callbacks_configs"), dict):
-            self.CALLBACKS_CONFIGS = yaml_cfg["callbacks_configs"]
-        else:
-            raise ValueError("Callbacks configuration not found in YAML file")
-        
-        if yaml_cfg and isinstance(yaml_cfg.get("tensorboard_configs"), dict):
-            self.TENSORBOARD_CONFIGS = yaml_cfg["tensorboard_configs"]
-        else:
-            raise ValueError("Tensorboard configuration not found in YAML file")
+        # Update defaults with YAML config if available
+        if yaml_cfg:
+            for key in default_configs:
+                if isinstance(yaml_cfg.get(key), dict):
+                    default_configs[key].update(yaml_cfg[key])
+
+        # Set configurations with defaults
+        self.DETECTION_MODELS = default_configs["detection_models"]
+        self.SEGMENTATION_MODELS = default_configs["segmentation_models"]
+        self.MULTITASK_MODELS = default_configs["multitask_models"]
+        self.LOSS_CONFIGS = default_configs["loss_configs"]
+        self.OPTIMIZER_CONFIGS = default_configs["optimizer_configs"]
+        self.METRICS_CONFIGS = default_configs["metrics_configs"]
+        self.CALLBACKS_CONFIGS = default_configs["callbacks_configs"]
+        self.TENSORBOARD_CONFIGS = default_configs["tensorboard_configs"]
         

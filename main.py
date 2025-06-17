@@ -67,11 +67,17 @@ def _prepare_datasets(
         val_split=0.2,
         seed=42
     )
-    # val_ds = val_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
-    # test_ds = test_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
-
-    # augmentor = DataAugmentor(config=cfg, target_height=cfg.IMG_SIZE[0], target_width=cfg.IMG_SIZE[1])
-    # train_ds = train_ds.map(augmentor, num_parallel_calls=tf.data.AUTOTUNE)
+    
+    # Initialize augmentor for training data
+    augmentor = DataAugmentor(config=cfg, target_height=cfg.IMG_SIZE[0], target_width=cfg.IMG_SIZE[1])
+    
+    # Apply preprocessing to all datasets
+    val_ds = val_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+    test_ds = test_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+    
+    # Apply augmentation only to training data
+    if cfg.ENABLE_AUGMENTATION:
+        train_ds = train_ds.map(augmentor, num_parallel_calls=tf.data.AUTOTUNE)
 
     if task == "detection":
         # Resize/normalize images and prepare detection targets
@@ -136,7 +142,7 @@ def main(argv: list[str] | None = None) -> None:
     models_cfg: ModelConfigs | None = None
     if args.config_path and args.config_path.exists():
         try:
-            models_cfg = ModelConfigs()
+            models_cfg = ModelConfigs(config_path=args.config_path)
         except Exception as exc:
             print(f"[WARNING] Failed to load ModelConfigs: {exc}. Falling back to defaults.")
             models_cfg = None
@@ -149,7 +155,8 @@ def main(argv: list[str] | None = None) -> None:
 
     trainer = UniversalTrainer(
         model=model,
-        task_type=args.task
+        task_type=args.task,
+        num_classes=cfg.NUM_CLASSES_DETECTION if args.task == "detection" else cfg.NUM_CLASSES_SEGMENTATION
     )
 
     print(f"\n[INFO] Starting training – task={args.task} backbone={args.backbone} epochs={args.epochs}")

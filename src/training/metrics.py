@@ -44,6 +44,7 @@ class SOTAMetrics:
                 super().__init__(name=name, **kwargs)
                 self.dice_sum = self.add_weight(name='dice_sum', initializer='zeros')
                 self.count = self.add_weight(name='count', initializer='zeros')
+            
             def update_state(self, y_true, y_pred, sample_weight=None):
                 y_true = tf.cast(tf.reshape(y_true, [-1]), tf.float32)
                 y_pred = tf.cast(tf.reshape(y_pred, [-1]), tf.float32)
@@ -52,11 +53,14 @@ class SOTAMetrics:
                 dice = (2. * intersection + 1e-7) / (union + 1e-7)
                 self.dice_sum.assign_add(dice)
                 self.count.assign_add(1.)
+            
             def result(self):
                 return self.dice_sum / self.count
+            
             def reset_state(self):
                 self.dice_sum.assign(0.)
                 self.count.assign(0.)
+        
         return DiceCoefficient()
 
     @staticmethod
@@ -141,18 +145,27 @@ class SOTAMetrics:
                 super().__init__(name=name, **kwargs)
                 self.map_sum = self.add_weight(name='map_sum', initializer='zeros')
                 self.count = self.add_weight(name='count', initializer='zeros')
+            
             def update_state(self, y_true, y_pred, sample_weight=None):
-                # NOTE: Cần sửa lại logic nếu muốn chuẩn hơn.
+                # Calculate IoU for bounding boxes
                 iou = tf.reduce_mean(tf.image.iou(y_true[..., :4], y_pred[..., :4], [2]))
+                
+                # Calculate confidence score
                 conf = tf.reduce_mean(y_pred[..., 4])  # objectness
+                
+                # Approximate mAP using IoU and confidence
                 map_score = iou * conf
-                self.map_sum.assign_add(tf.reduce_mean(map_score))
+                
+                self.map_sum.assign_add(map_score)
                 self.count.assign_add(1.)
+            
             def result(self):
                 return self.map_sum / self.count
+            
             def reset_state(self):
                 self.map_sum.assign(0.)
                 self.count.assign(0.)
+        
         return mAPApproximation()
 
     # ========= CLASSIFICATION METRICS =========

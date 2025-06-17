@@ -36,11 +36,18 @@ class Evaluator:
         self.task_type = task_type.lower()
 
         if self.task_type == "detection":
-            self.metric = SOTAMetrics.get_detection_metrics()
+            self.metric = SOTAMetrics.get_detection_metrics_structured(model, num_classes=num_classes or 37)
         elif self.task_type == "segmentation":
+            if num_classes is None:
+                raise ValueError("num_classes must be provided for segmentation task")
             self.metric = SOTAMetrics.get_segmentation_metrics(num_classes=num_classes)
         elif self.task_type == "multitask":
-            self.metric = SOTAMetrics.get_multitask_metrics()
+            if num_classes is None:
+                raise ValueError("num_classes must be provided for multitask")
+            self.metric = SOTAMetrics.get_multitask_metrics(
+                num_detection_classes=num_classes,
+                num_segmentation_classes=num_classes
+            )
         else:
             raise ValueError(f"Unsupported task type: {task_type}")
 

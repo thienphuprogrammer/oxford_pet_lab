@@ -41,12 +41,13 @@ class UniversalTrainer:
     # === LOSSES ===
     def get_loss(self, loss_type: str = 'auto'):
         """Get loss function tối ưu cho từng task"""
+        loss_configs = {
+            'detection': get_detection_loss(),
+            'segmentation': get_segmentation_loss(),
+            'multitask': get_multitask_loss()
+        }
+        
         if loss_type == 'auto':
-            loss_configs = {
-                'detection': get_detection_loss(),
-                'segmentation': get_segmentation_loss(),
-                'multitask': get_multitask_loss()
-            }
             return loss_configs[self.task_type]
         else:
             return loss_configs[loss_type]
@@ -99,7 +100,7 @@ class UniversalTrainer:
         self.model.compile(
             optimizer=self.get_optimizer(optimizer, learning_rate),
             loss=self.get_loss(loss),
-            # metrics=self.get_metrics(metrics)
+            metrics=self.get_metrics(metrics)
         )
         
         # Get callbacks
@@ -110,7 +111,7 @@ class UniversalTrainer:
             train_data,
             validation_data=val_data,
             epochs=epochs,
-            # callbacks=callback_list,
+            callbacks=callback_list,
             verbose=1,
             **kwargs
         )
