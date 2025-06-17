@@ -11,8 +11,7 @@ import tensorflow as tf
 from tqdm import tqdm
 
 from src.training.metrics import (
-    DetectionMetrics,
-    SegmentationMetrics,
+    SOTAMetrics,
 )
 
 __all__ = ["Evaluator"]
@@ -37,11 +36,11 @@ class Evaluator:
         self.task_type = task_type.lower()
 
         if self.task_type == "detection":
-            self.metric = DetectionMetrics()
+            self.metric = SOTAMetrics.get_detection_metrics()
         elif self.task_type == "segmentation":
-            self.metric = SegmentationMetrics(num_classes=num_classes)
+            self.metric = SOTAMetrics.get_segmentation_metrics(num_classes=num_classes)
         elif self.task_type == "multitask":
-            self.metric = MultiTaskMetrics(num_classes=num_classes)
+            self.metric = SOTAMetrics.get_multitask_metrics()
         else:
             raise ValueError(f"Unsupported task type: {task_type}")
 

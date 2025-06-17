@@ -144,13 +144,16 @@ def main(argv: list[str] | None = None) -> None:
     train_ds, val_ds, test_ds = _prepare_datasets(args.task, args.batch_size, cfg)
 
     model = _build_model(args.task, cfg, args.backbone)
+    
+    model.summary()
+
     trainer = UniversalTrainer(
         model=model,
         task_type=args.task
     )
 
     print(f"\n[INFO] Starting training – task={args.task} backbone={args.backbone} epochs={args.epochs}")
-    trainer.fit(
+    trainer.train(
         train_ds,
         val_ds,
         epochs=args.epochs,

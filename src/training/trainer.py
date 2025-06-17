@@ -14,7 +14,7 @@ class UniversalTrainer:
     Code ngắn gọn, tận dụng thư viện có sẵn
     """
     
-    def __init__(self, model: ModelBuilder, task_type: str = 'detection', model_name: str = 'model'):
+    def __init__(self, model, task_type: str = 'detection', model_name: str = 'model'):
         """
         Args:
             task_type: 'detection', 'segmentation', 'multitask'
@@ -23,7 +23,6 @@ class UniversalTrainer:
         self.task_type = task_type.lower()
         self.model = model
         self.model_name = model_name
-        self.model = None
         self.history = None
 
     # === OPTIMIZERS ===
@@ -38,7 +37,7 @@ class UniversalTrainer:
         
         optimizers_map = {
             'adamw': tf.keras.optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4),
-            'lamb': tf.keras.optimizers.LAMB(learning_rate=learning_rate),
+            'lamb': tf.keras.optimizers.Lamb(learning_rate=learning_rate),
             'lookahead': tf.keras.optimizers.Lookahead(
                 tf.keras.optimizers.AdamW(learning_rate=learning_rate)
             ),
@@ -103,7 +102,7 @@ class UniversalTrainer:
             learning_rate: Learning rate
         """
         if self.model is None:
-            raise ValueError("Model chưa được build! Gọi build_model() trước.")
+            raise ValueError("Model is not built! Call build_model() first.")
         
         # Compile model với auto-config
         self.model.compile(

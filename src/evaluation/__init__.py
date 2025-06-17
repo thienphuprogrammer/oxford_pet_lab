@@ -1,4 +1,4 @@
 from .evaluator import Evaluator
-from .metrics_calculator import DetectionMetrics, SegmentationMetrics
+from .metrics_calculator import SOTAMetrics
 
-__all__ = ['Evaluator', 'DetectionMetrics', 'SegmentationMetrics']
+__all__ = ['Evaluator', 'SOTAMetrics']

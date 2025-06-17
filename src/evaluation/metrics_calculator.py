@@ -7,6 +7,6 @@ exports them so that the evaluation package can be used without importing from
 training directly.
 """
 
-from src.training.metrics import DetectionMetrics, SegmentationMetrics
+from src.training.metrics import SOTAMetrics
 
-__all__ = ["DetectionMetrics", "SegmentationMetrics"]
+__all__ = ["SOTAMetrics"]
