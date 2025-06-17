@@ -176,13 +176,17 @@ Object detection and semantic segmentation are fundamental computer vision probl
 
 *Semantic segmentation performance (update with your experimental results).*
 
-| Training Loss | Validation mIoU |
-|:-------------:|:--------------:|
-| ![](results/plots/segmentation_loss_curve.png) | ![](results/plots/segmentation_miou_curve.png) |
+![Segmentation loss curve](./results/plots/segmentation/PretrainedUNet.png)  
+*Training/validation loss for segmentation PretrainedUNet models.*
 
-| Qualitative Results |
-|:-------------------:|
-| ![](results/plots/seg_pred_1.png) ![](results/plots/seg_pred_2.png) ![](results/plots/seg_pred_3.png) ![](results/plots/seg_pred_4.png) |
+![Segmentation loss curve](./results/plots/segmentation/UNet3Plus.png)  
+*Training/validation loss for segmentation UNet3Plus models.*
+
+![Segmentation loss curve](./results/plots/segmentation/DeepLabV3Plus.png)  
+*Training/validation loss for segmentation DeepLabV3Plus models.*
+
+![Segmentation loss curve](./results/plots/segmentation/TransUNet.png)  
+*Training/validation loss for segmentation TransUNet models.*
 
 #### Discussion and Evaluation
 
