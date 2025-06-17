@@ -1,25 +1,24 @@
 loss_configs:
   detection:
-    loss_type: unified_detection
-    bbox_loss_weight: 2.0
-    cls_loss_weight: 1.0
-    quality_loss_weight: 1.0
-    use_eiou: true
-    use_varifocal: true
-    use_quality_focal: true
+    loss_type: combined
+    losses_config:
+      iou: 1.0
+      focal: 1.0
+
   segmentation:
-    loss_type: unified_segmentation
-    ce_weight: 1.0
-    dice_weight: 1.0
-    boundary_weight: 0.5
-    hausdorff_weight: 0.3
+    loss_type: combined
+    losses_config:
+      dice: 1.0
+      ce: 1.0
+      boundary: 0.5
+      hausdorff: 0.3
     use_adaptive_dice: true
     use_boundary_loss: true
     use_hausdorff_loss: true
 
 optimizer_configs:
   detection:
-    optimizer_type: unified_detection
+    optimizer_type: sgd
     bbox_loss_weight: 2.0
     cls_loss_weight: 1.0
     quality_loss_weight: 1.0

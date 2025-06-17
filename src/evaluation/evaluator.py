@@ -13,7 +13,6 @@ from tqdm import tqdm
 from src.training.metrics import (
     DetectionMetrics,
     SegmentationMetrics,
-    MultiTaskMetrics,
 )
 
 __all__ = ["Evaluator"]

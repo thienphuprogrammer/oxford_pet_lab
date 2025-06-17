@@ -259,18 +259,3 @@ def get_metrics(task_type: str, num_classes: int = None, **kwargs) -> List[tf.ke
     else:
         raise ValueError(f"Unknown task type: {task_type}. "
                         f"Supported types: 'detection', 'segmentation', 'classification', 'multitask'")
-
-
-# Simplified metric configurations
-METRIC_CONFIGS = {
-    'detection': {
-        'iou_threshold': 0.5,
-        'metrics': ['iou', 'bbox_mae', 'precision', 'recall', 'f1_score', 'cls_accuracy']
-    },
-    'segmentation': {
-        'metrics': ['pixel_accuracy', 'dice_coef', 'mean_iou']
-    },
-    'classification': {
-        'metrics': ['accuracy', 'top5_accuracy', 'precision', 'recall']
-    }
-}

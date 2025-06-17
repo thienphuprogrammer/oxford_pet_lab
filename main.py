@@ -1,23 +1,12 @@
-"""src/main.py
-Entry-point script to train / evaluate Oxford-IIIT Pet models from the
-command-line. The script wires together the high-level components already
-implemented throughout *src/* so that the user can run e.g.
-
-    $ python -m src.main --task detection --backbone resnet50 --epochs 30
-
-Without touching the underlying library code.
-"""
 from __future__ import annotations
-
 import argparse
 import json
-from mimetypes import suffix_map
 from pathlib import Path
 from typing import Any
 
 import tensorflow as tf
 
-# Internal imports ------------------------------------------------------------
+# Internal imports
 from src.config.config import Config
 from src.config.model_configs import ModelConfigs
 from src.data import OxfordPetDatasetLoader, DataPreprocessor, DataAugmentor
@@ -25,30 +14,15 @@ from src.evaluation.evaluator import Evaluator
 from src.models.base_model import ModelBuilder
 from src.training.trainer import Trainer
 
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
-
-def _build_model(task: str, cfg: Config) -> tf.keras.Model:
-    """Factory wrapper around :class:`ModelBuilder`.
-
-    The mapping below keeps CLI simple while still allowing the user to change
-    backbones. Extend as needed when new architectures are added.
-    """
+def _build_model(task: str, cfg: Config, backbone: str) -> tf.keras.Model:
     task = task.lower()
-
     if task == "detection":
-        # For now we expose two flavours: simple (tiny custom CNN) or pretrained
-        # backbone. We always use the *pretrained* builder here so that different
-        # backbones can be selected via ``--backbone``.
         return ModelBuilder.build_detection_model(
             model_type="pretrained",
             num_classes=cfg.NUM_CLASSES_DETECTION,
             config=cfg,
         )
-
     if task == "segmentation":
-        # Map backbone → segmentation model_type.
         seg_mapping = {
             "resnet50": "pretrained_unet",
             "mobilenetv2": "pretrained_unet",
@@ -60,7 +34,6 @@ def _build_model(task: str, cfg: Config) -> tf.keras.Model:
             backbone=backbone,
             config=cfg,
         )
-
     if task == "multitask":
         multi_mapping = {
             "resnet50": "resnet50_multitask",
@@ -74,16 +47,13 @@ def _build_model(task: str, cfg: Config) -> tf.keras.Model:
             backbone_name=backbone,
             config=cfg,
         )
-
     raise ValueError(f"Unknown task type: {task}")
-
 
 def _prepare_datasets(
     task: str,
     batch_size: int,
     cfg: Config,
 ) -> tuple[tf.data.Dataset, tf.data.Dataset, tf.data.Dataset]:
-    """Load TFDS splits and convert them into batched tensors."""
     loader = OxfordPetDatasetLoader(
         data_dir=cfg.DATA_DIR,
         download=cfg.DOWNLOAD,
@@ -95,53 +65,88 @@ def _prepare_datasets(
         seed=42
     )
 
-    # data augmentation
-    augmentor = DataAugmentor(
-        config=cfg,
-        prob_geo=0.7,      # Tăng geometric augmentations
-        prob_photo=0.8,    # Tăng photometric augmentations  
-        prob_mixup=0.3,    # Thêm MixUp
-        prob_cutout=0.2,   # Thêm Cutout
-        prob_mosaic=0.3    # Thêm Mosaic
-    )
-    train_ds = augmentor.create_augmented_dataset(
-        train_ds,
-        augmentation_factor=3
-    )
+    # Tiền xử lý: chuẩn hóa định dạng data
+    preprocessor = DataPreprocessor(config=cfg)
+    train_ds = train_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+    val_ds = val_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+    test_ds = test_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
 
-    prep = DataPreprocessor(config=cfg, shuffle_buffer=5000)
-    train_ds = prep.create_training_dataset(
-        train_ds,
-        batch_size=batch_size,
-        task=task,
-        cache_filename="train_cache.tfrecord"
-    )
-    val_ds = prep.create_validation_dataset(
-        val_ds,
-        batch_size=batch_size,
-        task=task,
-    )
-    test_ds = prep.create_validation_dataset(
-        test_ds,
-        batch_size=batch_size,
-        task=task
-    )
+    # Augmentation chỉ dùng cho train (và chỉ dùng với sample chuẩn hóa)
+    augmentor = DataAugmentor(config=cfg, target_height=cfg.IMG_SIZE[0], target_width=cfg.IMG_SIZE[1])
+    train_ds = train_ds.map(augmentor, num_parallel_calls=tf.data.AUTOTUNE)
 
-    # Monitor dataset quality
-    # stats_train = prep.get_dataset_statistics(train_ds)
-    # stats_val = prep.get_dataset_statistics(val_ds)
-    # stats_test = prep.get_dataset_statistics(test_ds)
+    # Chọn đầu ra theo task
+    if task == "detection":
+        def format_detection(sample):
+            image = sample['image']
+            target = {
+                'bbox': sample['head_bbox'],
+                'label': sample['label'],
+                'species': sample['species'],
+            }
+            return image, target
+        output_signature = (
+            tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 3), dtype=tf.float32),
+            {
+                'bbox': tf.TensorSpec(shape=(4,), dtype=tf.float32),
+                'label': tf.TensorSpec(shape=(), dtype=tf.int64),
+                'species': tf.TensorSpec(shape=(), dtype=tf.int64),
+            }
+        )
+        train_ds = train_ds.map(format_detection, num_parallel_calls=tf.data.AUTOTUNE)
+        val_ds = val_ds.map(format_detection, num_parallel_calls=tf.data.AUTOTUNE)
+        test_ds = test_ds.map(format_detection, num_parallel_calls=tf.data.AUTOTUNE)
+    elif task == "segmentation":
+        def format_segmentation(sample):
+            image = sample['image']
+            target = {
+                'mask': sample['segmentation_mask'],
+                'label': sample['label'],
+                'species': sample['species'],
+            }
+            return image, target
+        output_signature = (
+            tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 3), dtype=tf.float32),
+            {
+                'mask': tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 1), dtype=tf.float32),
+                'label': tf.TensorSpec(shape=(), dtype=tf.int64),
+                'species': tf.TensorSpec(shape=(), dtype=tf.int64),
+            }
+        )
+        train_ds = train_ds.map(format_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
+        val_ds = val_ds.map(format_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
+        test_ds = test_ds.map(format_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
+    elif task == "multitask":
+        def format_multitask(sample):
+            image = sample['image']
+            target = {
+                'bbox': sample['head_bbox'],
+                'mask': sample['segmentation_mask'],
+                'label': sample['label'],
+                'species': sample['species'],
+            }
+            return image, target
+        output_signature = (
+            tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 3), dtype=tf.float32),
+            {
+                'bbox': tf.TensorSpec(shape=(4,), dtype=tf.float32),
+                'mask': tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 1), dtype=tf.float32),
+                'label': tf.TensorSpec(shape=(), dtype=tf.int64),
+                'species': tf.TensorSpec(shape=(), dtype=tf.int64),
+            }
+        )
+        train_ds = train_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
+        val_ds = val_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
+        test_ds = test_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
+    else:
+        raise ValueError(f"Unknown task: {task}")
 
-    # Save stats
-    # with open(cfg.REPORT_DIR / "train_stats.json", "w") as f:
-    #     json.dump(stats_train, f)
-    # with open(cfg.REPORT_DIR / "val_stats.json", "w") as f:
-    #     json.dump(stats_val, f)
-    # with open(cfg.REPORT_DIR / "test_stats.json", "w") as f:
-    #     json.dump(stats_test, f)
+    # Batch + Prefetch
+    train_ds = train_ds.shuffle(2048).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+    val_ds = val_ds.batch(batch_size, drop_remainder=False).prefetch(tf.data.AUTOTUNE)
+    test_ds = test_ds.batch(batch_size, drop_remainder=False).prefetch(tf.data.AUTOTUNE)
 
     return train_ds, val_ds, test_ds
-
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
@@ -157,35 +162,25 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
-    # ------------------------------------------------------------------
-    # Setup & configuration
-    # ------------------------------------------------------------------
     cfg = Config()
     cfg.LOGS_DIR = args.output_dir / "logs"  # type: ignore[attr-defined]
     cfg.CHECKPOINT_DIR = args.output_dir / "checkpoints"  # type: ignore[attr-defined]
     cfg.BACKBONE = args.backbone
-    cfg.create_directories()  # ensure dirs exist
-
+    cfg.create_directories()
     Config.setup_gpu()
 
-    # (Optional) user-provided YAML config for hyper-parameters / losses / etc.
+    # (Optional) user-provided YAML config
     models_cfg: ModelConfigs | None = None
     if args.config_path and args.config_path.exists():
         try:
             models_cfg = ModelConfigs()
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:
             print(f"[WARNING] Failed to load ModelConfigs: {exc}. Falling back to defaults.")
             models_cfg = None
 
-    # ------------------------------------------------------------------
-    # Data pipeline
-    # ------------------------------------------------------------------
     train_ds, val_ds, test_ds = _prepare_datasets(args.task, args.batch_size, cfg)
 
-    # ------------------------------------------------------------------
-    # Model & trainer
-    # ------------------------------------------------------------------
-    model = _build_model(args.task, cfg)
+    model = _build_model(args.task, cfg, args.backbone)
     trainer = Trainer(
         model=model,
         task_type=args.task,
@@ -194,15 +189,9 @@ def main(argv: list[str] | None = None) -> None:
         models_config=models_cfg,
     )
 
-    # ------------------------------------------------------------------
-    # Training loop
-    # ------------------------------------------------------------------
     print(f"\n[INFO] Starting training – task={args.task} backbone={args.backbone} epochs={args.epochs}")
     trainer.fit(train_ds, val_dataset=val_ds, epochs=args.epochs)
 
-    # ------------------------------------------------------------------
-    # Evaluation
-    # ------------------------------------------------------------------
     evaluator = Evaluator(
         model=trainer.model,
         task_type=args.task,
@@ -214,7 +203,6 @@ def main(argv: list[str] | None = None) -> None:
     for k, v in metrics.items():
         print(f" • {k}: {v:.4f}" if isinstance(v, (int, float)) else f" • {k}: {v}")
 
-    # Persist metrics ---------------------------------------------------
     metrics_path = args.output_dir / "test_metrics.json"
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     with metrics_path.open("w", encoding="utf-8") as fp:
@@ -222,6 +210,5 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"\n[INFO] Finished – results saved to {args.output_dir}\n")
 
-
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     main()

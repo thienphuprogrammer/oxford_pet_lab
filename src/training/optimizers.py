@@ -19,6 +19,7 @@ TASK_CONFIGS = {
     
     # Classification
     'resnet': {'lr': 0.1, 'wd': 0.0001, 'momentum': 0.9, 'warmup': 5},
+    'resnet50': {'lr': 0.1, 'wd': 0.0001, 'momentum': 0.9, 'warmup': 5},
     'efficientnet': {'lr': 0.016, 'wd': 0.00001, 'momentum': 0.9, 'warmup': 3},
     'vit': {'lr': 0.001, 'wd': 0.05, 'warmup': 10},
 }
@@ -68,21 +69,25 @@ def create_lr_schedule(
     else:  # constant or step
         base_schedule = initial_lr
     
-    # Add warmup if needed
+    # Add warmup if needed using a custom schedule to avoid nested schedules
     if warmup_epochs > 0:
-        return tf.keras.optimizers.schedules.PiecewiseConstantDecay(
-            boundaries=[warmup_steps],
-            values=[
-                tf.keras.optimizers.schedules.PolynomialDecay(
-                    initial_learning_rate=0.0,
-                    decay_steps=warmup_steps,
-                    end_learning_rate=initial_lr,
-                    power=1.0
-                ),
-                base_schedule
-            ]
-        )
-    
+        class WarmUpSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+            def __init__(self, init_lr, warmup_steps, after_schedule):
+                super().__init__()
+                self.init_lr = init_lr
+                self.warmup_steps = tf.cast(warmup_steps, tf.float32)
+                self.after_schedule = after_schedule
+            def __call__(self, step):
+                step = tf.cast(step, tf.float32)
+                warmup_lr = self.init_lr * (step + 1) / self.warmup_steps
+                return tf.where(step < self.warmup_steps, warmup_lr, self.after_schedule(step - self.warmup_steps))
+            def get_config(self):
+                return {
+                    'init_lr': self.init_lr,
+                    'warmup_steps': int(self.warmup_steps.numpy() if isinstance(self.warmup_steps, tf.Tensor) else self.warmup_steps),
+                }
+        return WarmUpSchedule(initial_lr, warmup_steps, base_schedule)
+
     return base_schedule
 
 
