@@ -1,101 +1,181 @@
-from pathlib import Path
-from typing import Optional
-
+from src.models.base_model import ModelBuilder
 import tensorflow as tf
+import tensorflow_addons as tfa
+from tensorflow import keras
+from tensorflow.keras import callbacks
+import numpy as np
+from typing import Tuple
 
-from src.config.config import Config
-from src.config.model_configs import ModelConfigs
-from src.training.losses import get_loss          # Giữ lại nếu cần custom
-from src.training.metrics import get_metrics
-from src.training.callbacks import get_callbacks
+from src.training.callbacks import *
+from src.training.losses import *
+from src.training.metrics import *
+from src.training.optimizers import *
 
-
-class Trainer:
-    """Trainer tối giản – tận dụng hoàn toàn Keras Model.fit."""
-
-    def __init__(
-        self,
-        model: tf.keras.Model,
-        task_type: str,
-        config: Optional[Config] = None,
-        model_cfg: Optional[ModelConfigs] = None,
-    ):
+class UniversalTrainer:
+    """
+    Universal Training class cho Object Detection, Segmentation và Multitask
+    Code ngắn gọn, tận dụng thư viện có sẵn
+    """
+    
+    def __init__(self, model: ModelBuilder, task_type: str = 'detection', model_name: str = 'model'):
+        """
+        Args:
+            task_type: 'detection', 'segmentation', 'multitask'
+            model_name: Tên model để save
+        """
+        self.task_type = task_type.lower()
         self.model = model
-        self.task_type = task_type
-        self.cfg = config or Config()
-        self.model_cfg = model_cfg or ModelConfigs()
+        self.model_name = model_name
+        self.model = None
+        self.history = None
 
-        self._configure_precision_and_device()
-        self.optimizer = self._build_optimizer()
-        self.loss_fn = self._build_loss()
-        self.metrics = get_metrics(task_type, self.cfg.NUM_CLASSES_DETECTION)
-        self.callbacks = self._build_callbacks()
-
-    # ---------- public API ----------
-    def fit(
-        self,
-        train_ds: tf.data.Dataset,
-        val_ds: Optional[tf.data.Dataset] = None,
-        epochs: int | None = None,
-    ):
-        train_ds = self._prepare_ds(train_ds, training=True)
-        if val_ds is not None:
-            val_ds = self._prepare_ds(val_ds, training=False)
-
+    # === OPTIMIZERS ===
+    def get_optimizer(self, optimizer_type: str = 'auto', learning_rate: float = 1e-3):
+        """Get optimizer tối ưu cho từng task"""
+        if optimizer_type == 'auto':
+            optimizer_type = {
+                'detection': 'adamw',
+                'segmentation': 'lamb', 
+                'multitask': 'lookahead'
+            }[self.task_type]
+        
+        optimizers_map = {
+            'adamw': tfa.optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4),
+            'lamb': tfa.optimizers.LAMB(learning_rate=learning_rate),
+            'lookahead': tfa.optimizers.Lookahead(
+                tfa.optimizers.AdamW(learning_rate=learning_rate)
+            ),
+            'sgd': keras.optimizers.SGD(learning_rate=learning_rate, momentum=0.9),
+            'adam': keras.optimizers.Adam(learning_rate=learning_rate)
+        }
+        
+        return optimizers_map.get(optimizer_type, keras.optimizers.Adam(learning_rate))
+    
+    # === LOSSES ===
+    def get_loss(self, loss_type: str = 'auto'):
+        """Get loss function tối ưu cho từng task"""
+        if loss_type == 'auto':
+            loss_configs = {
+                'detection': get_detection_loss(),
+                'segmentation': get_segmentation_loss(),
+                'multitask': get_multitask_loss()
+            }
+            return loss_configs[self.task_type]
+        
+        loss_map = {
+            'focal': tfa.losses.focal_loss.sigmoid_focal_crossentropy,
+            'dice': tfa.losses.sigmoid_focal_crossentropy,
+            'iou': self._iou_loss,
+            'huber': keras.losses.Huber(),
+            'mse': 'mse',
+            'categorical': 'categorical_crossentropy',
+            'binary': 'binary_crossentropy'
+        }
+        
+        return loss_map.get(loss_type, 'mse')
+    
+    # === METRICS ===
+    def get_metrics(self, metrics_type: str = 'auto'):
+        """Get metrics tối ưu cho từng task"""
+        metrics_configs = {
+            'detection': get_detection_setup(),
+            'segmentation': get_segmentation_setup(),
+            'multitask': get_multitask_setup(),
+        }
+        return metrics_configs[self.task_type]
+        
+    
+    # === CALLBACKS ===
+    def get_callbacks(
+        self, callback_type: str = 'sota', monitor: str = 'val_loss', 
+                     patience: int = 15, **kwargs):
+        """Get callbacks tối ưu"""
+        if callback_type == 'sota':
+            base_callbacks = get_sota_callbacks(monitor=monitor, patience=patience)
+        elif callback_type == 'advanced':
+            base_callbacks = get_advanced_callbacks(patience=patience, monitor=monitor)
+        
+        return base_callbacks
+    
+    # === MAIN TRAINING METHOD ===
+    def train(self, train_data, val_data=None, epochs: int = 100, 
+              optimizer: str = 'auto', loss: str = 'auto', 
+              metrics: str = 'auto', callbacks_type: str = 'sota',
+              learning_rate: float = 1e-3, **kwargs):
+        """
+        Main training method - Siêu đơn giản!
+        
+        Args:
+            train_data: Training dataset
+            val_data: Validation dataset
+            epochs: Number of epochs
+            optimizer: Optimizer type ('auto', 'adamw', 'lamb', etc.)
+            loss: Loss type ('auto', 'focal', 'dice', etc.)
+            metrics: Metrics type ('auto' or custom list)
+            callbacks_type: Callback type ('sota', 'advanced', 'basic')
+            learning_rate: Learning rate
+        """
+        if self.model is None:
+            raise ValueError("Model chưa được build! Gọi build_model() trước.")
+        
+        # Compile model với auto-config
         self.model.compile(
-            optimizer=self.optimizer,
-            loss=self.loss_fn,
-            metrics=self.metrics,
-            run_eagerly=getattr(self.cfg, "DEBUG", False),
+            optimizer=self.get_optimizer(optimizer, learning_rate),
+            loss=self.get_loss(loss),
+            metrics=self.get_metrics(metrics)
         )
-        return self.model.fit(
-            train_ds,
-            validation_data=val_ds,
-            epochs=epochs or getattr(self.cfg, "EPOCHS", 100),
-            callbacks=self.callbacks,
+        
+        # Get callbacks
+        callback_list = self.get_callbacks(callbacks_type, **kwargs)
+        
+        # Fit model
+        self.history = self.model.fit(
+            train_data,
+            validation_data=val_data,
+            epochs=epochs,
+            callbacks=callback_list,
+            verbose=1,
+            **kwargs
         )
+        
+        return self.history
+    
+    # === UTILITY METHODS ===
+    def save_model(self, filepath: str = None):
+        """Save model"""
+        if filepath is None:
+            filepath = f'{self.model_name}_final.h5'
+        self.model.save(filepath)
+        print(f"Model saved to {filepath}")
+    
+    def load_model(self, filepath: str):
+        """Load model"""
+        self.model = keras.models.load_model(filepath)
+        print(f"Model loaded from {filepath}")
+    
+    def predict(self, data):
+        """Predict"""
+        return self.model.predict(data)
+    
+    def evaluate(self, test_data):
+        """Evaluate model"""
+        return self.model.evaluate(test_data)
 
-    # ---------- helpers ----------
-    def _configure_precision_and_device(self):
-        if getattr(self.cfg, "USE_MIXED_PRECISION", False) and self.task_type != "detection":
-            tf.keras.mixed_precision.set_global_policy("mixed_float16")
-            self._need_loss_scale = True
-        else:
-            tf.keras.mixed_precision.set_global_policy("float32")
-            self._need_loss_scale = False
+# === QUICK SETUP FUNCTIONS ===
+def quick_detection_trainer(input_shape, num_classes, model_name='detection_model'):
+    """Quick setup cho Object Detection"""
+    trainer = UniversalTrainer('detection', model_name)
+    trainer.build_model(input_shape, num_classes, 'efficientdet')
+    return trainer
 
-        # memory growth
-        for gpu in tf.config.experimental.list_physical_devices("GPU"):
-            tf.config.experimental.set_memory_growth(gpu, True)
+def quick_segmentation_trainer(input_shape, num_classes, model_name='segmentation_model'):
+    """Quick setup cho Segmentation"""
+    trainer = UniversalTrainer('segmentation', model_name)
+    trainer.build_model(input_shape, num_classes, 'unet')
+    return trainer
 
-        # XLA
-        tf.config.optimizer.set_jit(getattr(self.cfg, "USE_XLA", False))
-
-    def _build_optimizer(self):
-        opt_cfg = getattr(self.cfg, "OPTIMIZER", {"class_name": "SGD",
-                                                  "config": {"learning_rate": 1e-2}})
-        opt = tf.keras.optimizers.get(opt_cfg)
-        if self._need_loss_scale:
-            opt = tf.keras.mixed_precision.LossScaleOptimizer(opt)
-        return opt
-
-    def _build_loss(self):
-        # Hỗ trợ dict/str; ưu tiên dùng get_loss nếu bạn đã có implement riêng
-        cfg = self.model_cfg.LOSS_CONFIGS[self.task_type]
-        if isinstance(cfg, str):
-            return get_loss(cfg)
-        loss_name = cfg.get("loss_type", next(iter(cfg)))
-        kwargs = {k: v for k, v in cfg.items() if k != "loss_type"}
-        return get_loss(loss_name, **kwargs)
-
-    def _build_callbacks(self):
-        log_dir = Path(self.cfg.LOGS_DIR) / self.task_type
-        ckpt_dir = Path(self.cfg.RESULTS_DIR) / "checkpoints" / self.task_type
-        log_dir.mkdir(parents=True, exist_ok=True)
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-        return get_callbacks(task=self.task_type, log_dir=log_dir, ckpt_dir=ckpt_dir)
-
-    def _prepare_ds(self, ds: tf.data.Dataset, training: bool):
-        if training:
-            ds = ds.shuffle(1000)
-        return ds.prefetch(tf.data.AUTOTUNE)
+def quick_multitask_trainer(input_shape, num_classes, model_name='multitask_model'):
+    """Quick setup cho Multitask"""
+    trainer = UniversalTrainer('multitask', model_name)
+    trainer.build_model(input_shape, num_classes)
+    return trainer
