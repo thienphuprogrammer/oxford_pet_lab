@@ -246,19 +246,3 @@ def get_multitask_setup(strategy='adaptive', lr=1e-3):
         'recommended_lr': lr,
         'scheduler': 'cosine'  # Recommend dùng với cosine scheduler
     }
-
-# ==========================================================
-# ONE-LINER OPTIMIZERS - CỰC KỲ NGẮN GỌN
-# ==========================================================
-
-# Quick optimizers cho từng task
-quick_adamw = lambda lr=1e-3: tfa.optimizers.AdamW(lr, weight_decay=1e-4)
-quick_sgd = lambda lr=1e-3: SGD(lr, momentum=0.9, nesterov=True)  
-quick_lamb = lambda lr=1e-3: tfa.optimizers.LAMB(lr, weight_decay_rate=0.01)
-quick_radam = lambda lr=1e-3: tfa.optimizers.RectifiedAdam(lr)
-
-# Task-specific quick setups
-seg_optimizer = lambda: quick_adamw(1e-3)      # Best for segmentation
-det_optimizer = lambda: quick_sgd(1e-4)        # Best for YOLO-style
-cls_optimizer = lambda: quick_sgd(1e-3)        # Best for ResNet-style
-mt_optimizer = lambda: quick_adamw(1e-3)       # Best for multitask

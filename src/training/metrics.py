@@ -200,12 +200,3 @@ def get_multitask_setup():
         'monitor': 'val_seg_iou',  # hoặc metric khác
         'mode': 'max'
     }
-
-# ==========================================================
-# ONE-LINER USAGE - CỰC KỲ NGẮN GỌN
-# ==========================================================
-
-# Quick metrics cho từng task
-quick_seg_metrics = lambda: [tfa.metrics.MeanIoU(2), tfa.metrics.F1Score(2), Precision(), Recall()]
-quick_det_metrics = lambda: [tfa.metrics.MeanIoU(2), MeanAbsoluteError(), BinaryAccuracy()]  
-quick_cls_metrics = lambda n: [CategoricalAccuracy(), tfa.metrics.F1Score(n, average='macro')]

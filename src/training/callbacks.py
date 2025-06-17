@@ -118,3 +118,37 @@ def cosine_annealing_with_warmup(epoch, current_lr, warmup_epochs, total_epochs,
         # Cosine annealing
         progress = (epoch - warmup_epochs) / (total_epochs - warmup_epochs)
         return min_lr + (max_lr - min_lr) * 0.5 * (1 + np.cos(np.pi * progress))
+
+# =====================================================
+# CÁCH SỬ DỤNG
+# =====================================================
+
+# 1. Setup cơ bản - đơn giản nhất
+def basic_setup():
+    callbacks = get_sota_callbacks(
+        monitor='val_accuracy',  # hoặc 'val_loss'
+        patience=15,
+        model_name='my_model'
+    )
+    return callbacks
+
+# 2. Setup nâng cao
+def advanced_setup():
+    callbacks = get_advanced_callbacks(
+        monitor='val_accuracy',
+        patience=20,
+        model_name='advanced_model',
+        cosine_restart=True,
+        warmup_epochs=10
+    )
+    return callbacks
+
+# 3. Custom mix - tự chọn callbacks
+def custom_setup():
+    return [
+        EarlyStopping('val_loss', patience=10, restore_best_weights=True),
+        ModelCheckpoint('best.h5', 'val_loss', save_best_only=True),
+        ReduceLROnPlateau('val_loss', factor=0.2, patience=5, min_lr=1e-7),
+        TensorBoard('logs', histogram_freq=1),
+    ]
+
