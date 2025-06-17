@@ -91,22 +91,13 @@ def _prepare_datasets(
         test_ds = test_ds.map(preprocessor.for_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
     elif task == "multitask":
         # First standardize sample (resize/normalize), then format multitask targets
-        def format_multitask(sample):
-            image = sample['image']
-            target = {
-                'bbox': sample['head_bbox'],
-                'mask': sample['segmentation_mask'],
-                'label': sample['label'],
-            }
-            return image, target
-
         train_ds = train_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
         val_ds = val_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
         test_ds = test_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
 
-        train_ds = train_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
-        val_ds = val_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
-        test_ds = test_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
+        train_ds = train_ds.map(preprocessor.for_multitask, num_parallel_calls=tf.data.AUTOTUNE)
+        val_ds = val_ds.map(preprocessor.for_multitask, num_parallel_calls=tf.data.AUTOTUNE)
+        test_ds = test_ds.map(preprocessor.for_multitask, num_parallel_calls=tf.data.AUTOTUNE)
     else:
         raise ValueError(f"Unknown task: {task}")
 

@@ -110,6 +110,25 @@ class DataPreprocessor:
         data = self.preprocess_sample(sample)
         return data['image'], data['label']
 
+    def for_multitask(self, sample: Dict[str, Any]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
+        """Format data for multitask learning (detection + segmentation)"""
+        data = self.preprocess_sample(sample)
+        image = data['image']
+        
+        # Ensure consistent shapes for detection targets
+        bbox = tf.reshape(data['head_bbox'], [4])  # [x1, y1, x2, y2]
+        label = tf.reshape(data['label'], [1])  # [class_id]
+        
+        # Ensure consistent shapes for segmentation targets
+        mask = tf.reshape(data['segmentation_mask'], [self.target_h, self.target_w, 1])
+        
+        target = {
+            'bbox': bbox,
+            'label': label,
+            'mask': mask
+        }
+        return image, target
+
     def get_signature(self):
         """Lấy TensorSpec cho output (dùng cho tf.data)."""
         return {
