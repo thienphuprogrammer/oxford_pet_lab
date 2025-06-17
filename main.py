@@ -13,6 +13,7 @@ from src.data import OxfordPetDatasetLoader, DataPreprocessor, DataAugmentor
 from src.evaluation.evaluator import Evaluator
 from src.models.base_model import ModelBuilder
 from src.training.trainer import *
+from src.utils.result_manager import ResultManager
 
 def _build_model(task: str, cfg: Config, backbone: str) -> tf.keras.Model:
     task = task.lower()
@@ -174,6 +175,46 @@ def main(argv: list[str] | None = None) -> None:
         json.dump({k: float(v) if hasattr(v, "numpy") else v for k, v in metrics.items()}, fp, indent=2)
 
     print(f"\n[INFO] Finished – results saved to {args.output_dir}\n")
+
+    # Initialize result manager
+    result_manager = ResultManager()
+    
+    # Save experiment configuration
+    config = {
+        'task_type': args.task,
+        'backbone': args.backbone,
+        'epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'config_path': args.config_path,
+        'output_dir': args.output_dir,
+        'model_configs': models_cfg.__dict__
+    }
+    result_manager.save_experiment_config(config, args.task)
+    
+    # Save training history plots
+    result_manager.save_plots(trainer.history.history, args.task)
+    
+    # Save model
+    weights_path, arch_path = result_manager.save_model(model, args.task)
+    print(f"Model saved to: {weights_path}")
+    print(f"Model architecture saved to: {arch_path}")
+    
+    # Save evaluation metrics
+    metrics_path = result_manager.save_metrics(metrics, args.task)
+    print(f"Evaluation metrics saved to: {metrics_path}")
+    
+    # Save experiment results
+    results = {
+        'config': config,
+        'metrics': metrics,
+        'history': trainer.history.history,
+        'model_paths': {
+            'weights': weights_path,
+            'architecture': arch_path
+        }
+    }
+    results_path = result_manager.save_experiment_results(results, args.task)
+    print(f"Complete experiment results saved to: {results_path}")
 
 if __name__ == "__main__":
     main()
