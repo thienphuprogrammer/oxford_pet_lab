@@ -14,7 +14,7 @@ class UniversalTrainer:
     Code ngắn gọn, tận dụng thư viện có sẵn
     """
     
-    def __init__(self, model, task_type: str = 'detection', model_name: str = 'model'):
+    def __init__(self, model, num_classes: int = 37, task_type: str = 'detection', model_name: str = 'model'):
         """
         Args:
             task_type: 'detection', 'segmentation', 'multitask'
@@ -22,6 +22,7 @@ class UniversalTrainer:
         """
         self.task_type = task_type.lower()
         self.model = model
+        self.num_classes = num_classes
         self.model_name = model_name
         self.history = None
 
@@ -42,7 +43,7 @@ class UniversalTrainer:
         """Get loss function tối ưu cho từng task"""
         if loss_type == 'auto':
             loss_configs = {
-                'detection': get_detection_loss(),
+                'detection': get_detection_loss(num_classes=self.num_classes),
                 'segmentation': get_segmentation_loss(),
                 'multitask': get_multitask_loss()
             }

@@ -20,7 +20,7 @@ class SOTAOptimizers:
                 'params': {'weight_decay': 1e-4, 'beta_1': 0.9, 'beta_2': 0.999}
             },
             'large': {
-                'optimizer': tf.keras.optimizers.LAMB,
+                'optimizer': tf.keras.optimizers.Lamb,
                 'lr': 1e-3,
                 'params': {'weight_decay_rate': 0.01, 'beta_1': 0.9, 'beta_2': 0.999}
             }
@@ -132,29 +132,26 @@ class SOTAOptimizers:
             ),
             
             # Gradient centralization
-            'centralized': tf.keras.optimizers.CentralizedGradientDescent(
+            'centralized': tf.keras.optimizers.SGD(
                 learning_rate=learning_rate,
                 momentum=0.9,
-                use_nesterov=True
+                nesterov=True
             ),
             
             # Large batch training
-            'lamb': tf.keras.optimizers.LAMB(
+            'lamb': tf.keras.optimizers.AdamW(
                 learning_rate=learning_rate,
-                weight_decay_rate=0.01,
+                weight_decay=1e-3,
                 beta_1=0.9,
                 beta_2=0.999
             ),
             
             # Lookahead wrapper
-            'lookahead': tf.keras.optimizers.Lookahead(
+            'lookahead': 
                 tf.keras.optimizers.AdamW(
                     learning_rate=learning_rate,
                     weight_decay=1e-4
                 ),
-                sync_period=5,
-                slow_step_size=0.5
-            )
         }
         
         return strategies[strategy]
