@@ -1,449 +1,276 @@
 """
-Custom metrics for object detection and semantic segmentation
+Optimized custom metrics for object detection and semantic segmentation
 """
 import tensorflow as tf
-from typing import List
+from typing import List, Dict, Union
+
 
 class IoUMetric(tf.keras.metrics.Metric):
     """Intersection over Union metric for bounding boxes"""
     
     def __init__(self, name='iou', **kwargs):
         super().__init__(name=name, **kwargs)
-        self.total_iou = self.add_weight(name='total_iou', initializer='zeros')
+        self.iou_sum = self.add_weight(name='iou_sum', initializer='zeros')
         self.count = self.add_weight(name='count', initializer='zeros')
         
     def update_state(self, y_true, y_pred, sample_weight=None):
-        """
-        y_true, y_pred: [batch_size, 4] in format [x1, y1, x2, y2]
-        """
+        """y_true, y_pred: [batch_size, 4] in format [x1, y1, x2, y2]"""
         # Calculate intersection
-        x1_max = tf.maximum(y_true[..., 0], y_pred[..., 0])
-        y1_max = tf.maximum(y_true[..., 1], y_pred[..., 1])
-        x2_min = tf.minimum(y_true[..., 2], y_pred[..., 2])
-        y2_min = tf.minimum(y_true[..., 3], y_pred[..., 3])
+        inter_area = tf.maximum(0.0, 
+            tf.minimum(y_true[..., 2], y_pred[..., 2]) - tf.maximum(y_true[..., 0], y_pred[..., 0])
+        ) * tf.maximum(0.0, 
+            tf.minimum(y_true[..., 3], y_pred[..., 3]) - tf.maximum(y_true[..., 1], y_pred[..., 1])
+        )
         
-        intersection_area = tf.maximum(0.0, x2_min - x1_max) * tf.maximum(0.0, y2_min - y1_max)
-        
-        # Calculate areas
+        # Calculate union
         true_area = (y_true[..., 2] - y_true[..., 0]) * (y_true[..., 3] - y_true[..., 1])
         pred_area = (y_pred[..., 2] - y_pred[..., 0]) * (y_pred[..., 3] - y_pred[..., 1])
-        union_area = true_area + pred_area - intersection_area
+        union_area = true_area + pred_area - inter_area
         
         # Calculate IoU
-        iou = intersection_area / (union_area + 1e-8)
+        iou = inter_area / (union_area + tf.keras.backend.epsilon())
         
-        # Update state
-        self.total_iou.assign_add(tf.reduce_sum(iou))
+        self.iou_sum.assign_add(tf.reduce_sum(iou))
         self.count.assign_add(tf.cast(tf.size(iou), tf.float32))
         
     def result(self):
-        return self.total_iou / self.count
+        return self.iou_sum / (self.count + tf.keras.backend.epsilon())
         
     def reset_state(self):
-        self.total_iou.assign(0.0)
-        self.count.assign(0.0)
-
-
-class MeanAverageError(tf.keras.metrics.Metric):
-    """Mean Average Error for bounding box regression"""
-    
-    def __init__(self, name='mae', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.total_error = self.add_weight(name='total_error', initializer='zeros')
-        self.count = self.add_weight(name='count', initializer='zeros')
-        
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        error = tf.reduce_mean(tf.abs(y_true - y_pred), axis=-1)
-        self.total_error.assign_add(tf.reduce_sum(error))
-        self.count.assign_add(tf.cast(tf.shape(error)[0], tf.float32))
-        
-    def result(self):
-        return self.total_error / self.count
-        
-    def reset_state(self):
-        self.total_error.assign(0.0)
+        self.iou_sum.assign(0.0)
         self.count.assign(0.0)
 
 
 class DiceCoefficient(tf.keras.metrics.Metric):
     """Dice coefficient for semantic segmentation"""
     
-    def __init__(self, smooth=1.0, name='dice_coef', **kwargs):
+    def __init__(self, smooth=1e-6, name='dice_coef', **kwargs):
         super().__init__(name=name, **kwargs)
         self.smooth = smooth
-        self.total_dice = self.add_weight(name='total_dice', initializer='zeros')
+        self.dice_sum = self.add_weight(name='dice_sum', initializer='zeros')
         self.count = self.add_weight(name='count', initializer='zeros')
         
     def update_state(self, y_true, y_pred, sample_weight=None):
-        # Convert to binary if needed
+        # Convert to binary if multi-class
         if y_pred.shape[-1] > 1:
             y_pred = tf.argmax(y_pred, axis=-1)
             y_true = tf.argmax(y_true, axis=-1)
             
-        # Flatten the tensors
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        
+        # Flatten for batch-wise calculation
         y_true_flat = tf.reshape(y_true, [tf.shape(y_true)[0], -1])
         y_pred_flat = tf.reshape(y_pred, [tf.shape(y_pred)[0], -1])
         
-        # Calculate intersection and union for each sample
         intersection = tf.reduce_sum(y_true_flat * y_pred_flat, axis=1)
-        union = tf.reduce_sum(y_true_flat, axis=1) + tf.reduce_sum(y_pred_flat, axis=1)
+        union = tf.reduce_sum(y_true_flat + y_pred_flat, axis=1)
         
-        # Calculate Dice coefficient for each sample
-        dice_coef = (2.0 * intersection + self.smooth) / (union + self.smooth)
+        dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
         
-        # Update state
-        self.total_dice.assign_add(tf.reduce_sum(dice_coef))
-        self.count.assign_add(tf.cast(tf.shape(dice_coef)[0], tf.float32))
+        self.dice_sum.assign_add(tf.reduce_sum(dice))
+        self.count.assign_add(tf.cast(tf.shape(dice)[0], tf.float32))
         
     def result(self):
-        return self.total_dice / self.count
+        return self.dice_sum / (self.count + tf.keras.backend.epsilon())
         
     def reset_state(self):
-        self.total_dice.assign(0.0)
+        self.dice_sum.assign(0.0)
         self.count.assign(0.0)
 
 
-class PixelAccuracy(tf.keras.metrics.Metric):
-    """Pixel accuracy for semantic segmentation"""
-    
-    def __init__(self, name='pixel_accuracy', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.total_correct = self.add_weight(name='total_correct', initializer='zeros')
-        self.total_pixels = self.add_weight(name='total_pixels', initializer='zeros')
-        
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Convert to class predictions
-        if y_pred.shape[-1] > 1:
-            y_pred = tf.argmax(y_pred, axis=-1)
-            y_true = tf.argmax(y_true, axis=-1)
-            
-        # Calculate correct predictions
-        correct = tf.cast(tf.equal(y_true, y_pred), tf.float32)
-        
-        # Update state
-        self.total_correct.assign_add(tf.reduce_sum(correct))
-        self.total_pixels.assign_add(tf.cast(tf.size(correct), tf.float32))
-        
-    def result(self):
-        return self.total_correct / self.total_pixels
-        
-    def reset_state(self):
-        self.total_correct.assign(0.0)
-        self.total_pixels.assign(0.0)
-
-
-class MeanIoU(tf.keras.metrics.Metric):
-    """Mean IoU for semantic segmentation"""
-    
-    def __init__(self, num_classes, name='mean_iou', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.num_classes = num_classes
-        self.total_cm = self.add_weight(
-            name='total_confusion_matrix',
-            shape=(num_classes, num_classes),
-            initializer='zeros'
-        )
-        
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Convert to class predictions
-        if y_pred.shape[-1] > 1:
-            y_pred = tf.argmax(y_pred, axis=-1)
-            y_true = tf.argmax(y_true, axis=-1)
-            
-        # Flatten predictions
-        y_true_flat = tf.reshape(y_true, [-1])
-        y_pred_flat = tf.reshape(y_pred, [-1])
-        
-        # Calculate confusion matrix
-        cm = tf.math.confusion_matrix(
-            y_true_flat, y_pred_flat, num_classes=self.num_classes
-        )
-        
-        # Update total confusion matrix
-        self.total_cm.assign_add(tf.cast(cm, tf.float32))
-        
-    def result(self):
-        # Calculate IoU for each class
-        sum_over_row = tf.reduce_sum(self.total_cm, axis=0)
-        sum_over_col = tf.reduce_sum(self.total_cm, axis=1)
-        true_positives = tf.linalg.diag_part(self.total_cm)
-        
-        # IoU = TP / (TP + FP + FN)
-        denominator = sum_over_row + sum_over_col - true_positives
-        iou = true_positives / (denominator + 1e-8)
-        
-        # Return mean IoU
-        return tf.reduce_mean(iou)
-        
-    def reset_state(self):
-        self.total_cm.assign(tf.zeros_like(self.total_cm))
-
-
-class PrecisionAtIoU(tf.keras.metrics.Metric):
-    """Precision at specific IoU threshold for object detection"""
-    
-    def __init__(self, iou_threshold=0.5, name='precision_at_iou', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.iou_threshold = iou_threshold
-        self.true_positives = self.add_weight(name='true_positives', initializer='zeros')
-        self.false_positives = self.add_weight(name='false_positives', initializer='zeros')
-        
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Calculate IoU
-        iou = self._calculate_iou(y_true, y_pred)
-        
-        # Determine true positives and false positives
-        tp = tf.reduce_sum(tf.cast(iou >= self.iou_threshold, tf.float32))
-        fp = tf.reduce_sum(tf.cast(iou < self.iou_threshold, tf.float32))
-        
-        # Update state
-        self.true_positives.assign_add(tp)
-        self.false_positives.assign_add(fp)
-        
-    def _calculate_iou(self, y_true, y_pred):
-        """Calculate IoU between predicted and true bounding boxes"""
-        # Implementation similar to IoUMetric
-        x1_max = tf.maximum(y_true[..., 0], y_pred[..., 0])
-        y1_max = tf.maximum(y_true[..., 1], y_pred[..., 1])
-        x2_min = tf.minimum(y_true[..., 2], y_pred[..., 2])
-        y2_min = tf.minimum(y_true[..., 3], y_pred[..., 3])
-        
-        intersection_area = tf.maximum(0.0, x2_min - x1_max) * tf.maximum(0.0, y2_min - y1_max)
-        
-        true_area = (y_true[..., 2] - y_true[..., 0]) * (y_true[..., 3] - y_true[..., 1])
-        pred_area = (y_pred[..., 2] - y_pred[..., 0]) * (y_pred[..., 3] - y_pred[..., 1])
-        union_area = true_area + pred_area - intersection_area
-        
-        return intersection_area / (union_area + 1e-8)
-        
-    def result(self):
-        return self.true_positives / (self.true_positives + self.false_positives + 1e-8)
-        
-    def reset_state(self):
-        self.true_positives.assign(0.0)
-        self.false_positives.assign(0.0)
-
-
-class RecallAtIoU(tf.keras.metrics.Metric):
-    """Recall at specific IoU threshold for object detection"""
-    
-    def __init__(self, iou_threshold=0.5, name='recall_at_iou', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.iou_threshold = iou_threshold
-        self.true_positives = self.add_weight(name='true_positives', initializer='zeros')
-        self.false_negatives = self.add_weight(name='false_negatives', initializer='zeros')
-        
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Calculate IoU
-        iou = self._calculate_iou(y_true, y_pred)
-        
-        # Determine true positives and false negatives
-        tp = tf.reduce_sum(tf.cast(iou >= self.iou_threshold, tf.float32))
-        total_positives = tf.cast(tf.shape(y_true)[0], tf.float32)
-        fn = total_positives - tp
-        
-        # Update state
-        self.true_positives.assign_add(tp)
-        self.false_negatives.assign_add(fn)
-        
-    def _calculate_iou(self, y_true, y_pred):
-        """Calculate IoU between predicted and true bounding boxes"""
-        x1_max = tf.maximum(y_true[..., 0], y_pred[..., 0])
-        y1_max = tf.maximum(y_true[..., 1], y_pred[..., 1])
-        x2_min = tf.minimum(y_true[..., 2], y_pred[..., 2])
-        y2_min = tf.minimum(y_true[..., 3], y_pred[..., 3])
-        
-        intersection_area = tf.maximum(0.0, x2_min - x1_max) * tf.maximum(0.0, y2_min - y1_max)
-        
-        true_area = (y_true[..., 2] - y_true[..., 0]) * (y_true[..., 3] - y_true[..., 1])
-        pred_area = (y_pred[..., 2] - y_pred[..., 0]) * (y_pred[..., 3] - y_pred[..., 1])
-        union_area = true_area + pred_area - intersection_area
-        
-        return intersection_area / (union_area + 1e-8)
-        
-    def result(self):
-        return self.true_positives / (self.true_positives + self.false_negatives + 1e-8)
-        
-    def reset_state(self):
-        self.true_positives.assign(0.0)
-        self.false_negatives.assign(0.0)
-
-
-class MultiTaskMetrics(tf.keras.metrics.Metric):
-    """Combined metrics for multitask learning"""
-    
-    def __init__(self, num_classes: int = None, name='multitask_metrics', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.num_classes = num_classes
-
-        # Detection metrics
-        self.detection_iou = IoUMetric(name='detection_iou')
-        self.detection_mae = MeanAverageError(name='detection_mae')
-        
-        # Segmentation metrics
-        self.seg_dice = DiceCoefficient(name='seg_dice')
-        self.seg_pixel_acc = PixelAccuracy(name='seg_pixel_acc')
-        
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Update detection metrics
-        self.detection_iou.update_state(y_true['bbox'], y_pred['bbox'])
-        self.detection_mae.update_state(y_true['bbox'], y_pred['bbox'])
-        
-        # Update segmentation metrics
-        self.seg_dice.update_state(y_true['mask'], y_pred['mask'])
-        self.seg_pixel_acc.update_state(y_true['mask'], y_pred['mask'])
-        
-    def result(self):
-        return {
-            'detection_iou': self.detection_iou.result(),
-            'detection_mae': self.detection_mae.result(),
-            'seg_dice': self.seg_dice.result(),
-            'seg_pixel_acc': self.seg_pixel_acc.result()
-        }
-        
-    def reset_state(self):
-        self.detection_iou.reset_state()
-        self.detection_mae.reset_state()
-        self.seg_dice.reset_state()
-        self.seg_pixel_acc.reset_state()
-
-
 class DetectionMetrics(tf.keras.metrics.Metric):
-    def __init__(self, num_classes: int = None, name='detection_metrics', **kwargs):
+    """Combined metrics for object detection tasks"""
+    
+    def __init__(self, iou_threshold=0.5, name='detection_metrics', **kwargs):
         super().__init__(name=name, **kwargs)
-        self.iou = IoUMetric()
-        self.mae = MeanAverageError()
-        self.precision = PrecisionAtIoU(iou_threshold=0.5)
-        self.recall = RecallAtIoU(iou_threshold=0.5)
-        self.classification_acc = tf.keras.metrics.CategoricalAccuracy(name='classification_acc')
+        self.iou_threshold = iou_threshold
+        
+        # Use built-in metrics where possible
+        self.bbox_mae = tf.keras.metrics.MeanAbsoluteError(name='bbox_mae')
+        self.cls_accuracy = tf.keras.metrics.CategoricalAccuracy(name='cls_accuracy')
+        self.iou_metric = IoUMetric(name='iou')
+        
+        # Precision/Recall tracking
+        self.tp = self.add_weight(name='true_positives', initializer='zeros')
+        self.fp = self.add_weight(name='false_positives', initializer='zeros')
+        self.fn = self.add_weight(name='false_negatives', initializer='zeros')
+    
+    def _calculate_iou(self, y_true, y_pred):
+        """Helper to calculate IoU"""
+        inter_area = tf.maximum(0.0, 
+            tf.minimum(y_true[..., 2], y_pred[..., 2]) - tf.maximum(y_true[..., 0], y_pred[..., 0])
+        ) * tf.maximum(0.0, 
+            tf.minimum(y_true[..., 3], y_pred[..., 3]) - tf.maximum(y_true[..., 1], y_pred[..., 1])
+        )
+        
+        true_area = (y_true[..., 2] - y_true[..., 0]) * (y_true[..., 3] - y_true[..., 1])
+        pred_area = (y_pred[..., 2] - y_pred[..., 0]) * (y_pred[..., 3] - y_pred[..., 1])
+        union_area = true_area + pred_area - inter_area
+        
+        return inter_area / (union_area + tf.keras.backend.epsilon())
     
     def update_state(self, y_true, y_pred, sample_weight=None):
-        """Update detection metrics while gracefully handling various key names.
-
-        This method supports multiple naming conventions across the codebase:
-        Bounding-box keys: ``bbox``, ``bbox_output``, ``head_bbox``, ``bounding_box``.
-        Classification keys: ``class``, ``cls``, ``class_output``, ``label``, ``species``.
-        """
-        # Helper to fetch first available tensor given a list of candidate keys
-        def _get_first(d, keys):
-            for k in keys:
-                if k in d:
-                    return d[k]
+        """Update all detection metrics"""
+        # Helper function to get tensor by multiple possible keys
+        def _get_tensor(data_dict, keys):
+            for key in keys:
+                if key in data_dict:
+                    return data_dict[key]
             return None
-
-        # --- Bounding boxes ---
-        bbox_true = _get_first(y_true, ['bbox', 'bbox_output', 'head_bbox', 'bounding_box'])
-        bbox_pred = _get_first(y_pred, ['bbox', 'bbox_output', 'head_bbox', 'bounding_box'])
+        
+        # Handle different input formats
+        if isinstance(y_true, dict) and isinstance(y_pred, dict):
+            # Multi-output format
+            bbox_true = _get_tensor(y_true, ['bbox', 'bbox_output', 'head_bbox', 'bounding_box'])
+            bbox_pred = _get_tensor(y_pred, ['bbox', 'bbox_output', 'head_bbox', 'bounding_box'])
+            cls_true = _get_tensor(y_true, ['class', 'cls', 'label', 'species', 'class_output'])
+            cls_pred = _get_tensor(y_pred, ['class', 'cls', 'label', 'species', 'class_output'])
+        else:
+            # Single tensor format - assume bbox only
+            bbox_true, bbox_pred = y_true, y_pred
+            cls_true = cls_pred = None
+        
+        # Update bbox metrics
         if bbox_true is not None and bbox_pred is not None:
-            self.iou.update_state(bbox_true, bbox_pred)
-            self.mae.update_state(bbox_true, bbox_pred)
-            self.precision.update_state(bbox_true, bbox_pred)
-            self.recall.update_state(bbox_true, bbox_pred)
-
-        # --- Classification ---
-        cls_true = _get_first(y_true, ['class', 'cls', 'label', 'pet_class', 'species', 'class_output'])
-        cls_pred = _get_first(y_pred, ['class', 'cls', 'label', 'class_output', 'species'])
+            self.bbox_mae.update_state(bbox_true, bbox_pred)
+            self.iou_metric.update_state(bbox_true, bbox_pred)
+            
+            # Update precision/recall
+            iou_scores = self._calculate_iou(bbox_true, bbox_pred)
+            tp = tf.reduce_sum(tf.cast(iou_scores >= self.iou_threshold, tf.float32))
+            fp = tf.reduce_sum(tf.cast(iou_scores < self.iou_threshold, tf.float32))
+            fn = tf.cast(tf.shape(bbox_true)[0], tf.float32) - tp
+            
+            self.tp.assign_add(tp)
+            self.fp.assign_add(fp)
+            self.fn.assign_add(fn)
+        
+        # Update classification metrics
         if cls_true is not None and cls_pred is not None:
-            # Convert integer labels to one-hot if required while keeping a *static* rank.
-            # Using tf.squeeze without specifying an axis on tensors whose shapes are not fully
-            # defined can result in tensors with an *unknown* rank inside a `tf.function`, which
-            # subsequently breaks `tf.keras.metrics.CategoricalAccuracy` (it requires a statically
-            # known rank). The following logic therefore:
-            #   1. Removes a trailing singleton class dimension **explicitly** (axis = -1) when it
-            #      exists (e.g. labels shaped `[batch, 1]`).
-            #   2. Converts rank-1 label tensors to one-hot using the number of classes inferred from
-            #      the predictions’ last dimension. This guarantees the resulting tensor has rank 2
-            #      (`[batch, num_classes]`) with a statically known rank.
-            if cls_true.shape.rank is not None:
-                # Explicitly squeeze the trailing singleton dimension, if present.
-                if cls_true.shape.rank == 2 and cls_true.shape[-1] == 1:
-                    cls_true = tf.squeeze(cls_true, axis=-1)
-            else:
-                # Fallback for completely dynamic shape – try squeezing via tf.cond on runtime rank.
-                cls_rank = tf.rank(cls_true)
-                cls_true = tf.cond(
-                    tf.logical_and(tf.equal(cls_rank, 2), tf.equal(tf.shape(cls_true)[-1], 1)),
-                    lambda: tf.squeeze(cls_true, axis=-1),
-                    lambda: cls_true,
-                )
-
-            # After the potential squeeze, if the labels are still rank-1 (integer class ids),
-            # convert them to one-hot representation so that their rank matches `cls_pred`.
+            # Handle label format conversion
+            if cls_true.shape.rank == 2 and cls_true.shape[-1] == 1:
+                cls_true = tf.squeeze(cls_true, axis=-1)
+            
             if cls_true.shape.rank == 1:
                 num_classes = tf.shape(cls_pred)[-1]
-                cls_true = tf.one_hot(tf.cast(cls_true, tf.int32), depth=num_classes, dtype=tf.float32)
-
-            self.classification_acc.update_state(cls_true, cls_pred)
-
+                cls_true = tf.one_hot(tf.cast(cls_true, tf.int32), depth=num_classes)
+            
+            self.cls_accuracy.update_state(cls_true, cls_pred)
     
     def result(self):
+        precision = self.tp / (self.tp + self.fp + tf.keras.backend.epsilon())
+        recall = self.tp / (self.tp + self.fn + tf.keras.backend.epsilon())
+        f1_score = 2 * precision * recall / (precision + recall + tf.keras.backend.epsilon())
+        
         return {
-            'iou': self.iou.result(),
-            'mae': self.mae.result(),
-            'precision': self.precision.result(),
-            'recall': self.recall.result(),
-            'classification_acc': self.classification_acc.result()
+            'iou': self.iou_metric.result(),
+            'bbox_mae': self.bbox_mae.result(),
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1_score,
+            'cls_accuracy': self.cls_accuracy.result()
         }
     
     def reset_state(self):
-        self.iou.reset_state()
-        self.mae.reset_state()
-        self.precision.reset_state()
-        self.recall.reset_state()
-        self.classification_acc.reset_state()
+        self.iou_metric.reset_state()
+        self.bbox_mae.reset_state()
+        self.cls_accuracy.reset_state()
+        self.tp.assign(0.0)
+        self.fp.assign(0.0)
+        self.fn.assign(0.0)
 
 
 class SegmentationMetrics(tf.keras.metrics.Metric):
-    def __init__(self, num_classes: int = None, name='segmentation_metrics', **kwargs):
+    """Combined metrics for semantic segmentation tasks"""
+    
+    def __init__(self, num_classes=None, name='segmentation_metrics', **kwargs):
         super().__init__(name=name, **kwargs)
-        self.dice = DiceCoefficient()
-        self.pixel_acc = PixelAccuracy()
-        self.mean_iou = MeanIoU(num_classes=num_classes) if num_classes is not None else None
+        
+        # Use built-in metrics
+        self.pixel_accuracy = tf.keras.metrics.CategoricalAccuracy(name='pixel_accuracy')
+        self.dice_coef = DiceCoefficient(name='dice_coef')
+        
+        # Use built-in MeanIoU if available
+        if num_classes:
+            self.mean_iou = tf.keras.metrics.MeanIoU(num_classes=num_classes, name='mean_iou')
+        else:
+            self.mean_iou = None
     
     def update_state(self, y_true, y_pred, sample_weight=None):
-        self.dice.update_state(y_true, y_pred)
-        self.pixel_acc.update_state(y_true, y_pred)
-        if self.mean_iou is not None:
-            self.mean_iou.update_state(y_true, y_pred)
+        self.pixel_accuracy.update_state(y_true, y_pred)
+        self.dice_coef.update_state(y_true, y_pred)
+        
+        if self.mean_iou:
+            # Convert to class predictions for MeanIoU
+            if y_pred.shape[-1] > 1:
+                y_pred_classes = tf.argmax(y_pred, axis=-1)
+                y_true_classes = tf.argmax(y_true, axis=-1) if y_true.shape[-1] > 1 else y_true
+            else:
+                y_pred_classes = tf.cast(y_pred > 0.5, tf.int32)
+                y_true_classes = tf.cast(y_true, tf.int32)
+            
+            self.mean_iou.update_state(y_true_classes, y_pred_classes)
     
     def result(self):
-        return {
-            'dice': self.dice.result(),
-            'pixel_acc': self.pixel_acc.result(),
-            'mean_iou': self.mean_iou.result() if self.mean_iou is not None else None
+        results = {
+            'pixel_accuracy': self.pixel_accuracy.result(),
+            'dice_coef': self.dice_coef.result()
         }
+        
+        if self.mean_iou:
+            results['mean_iou'] = self.mean_iou.result()
+        
+        return results
     
     def reset_state(self):
-        self.dice.reset_state()
-        self.pixel_acc.reset_state()
-        if self.mean_iou is not None:
+        self.pixel_accuracy.reset_state()
+        self.dice_coef.reset_state()
+        if self.mean_iou:
             self.mean_iou.reset_state()
 
 
-def get_metrics(task_type='detection', num_classes=None) -> List[tf.keras.metrics.Metric]:
-    """Factory function to get metrics based on task type"""
+def get_metrics(task_type: str, num_classes: int = None, **kwargs) -> List[tf.keras.metrics.Metric]:
+    """Factory function to get optimized metrics based on task type"""
+    
     if task_type == 'detection':
-        return [DetectionMetrics(num_classes=num_classes)]
+        return [DetectionMetrics(**kwargs)]
+    
     elif task_type == 'segmentation':
-        return [SegmentationMetrics(num_classes=num_classes)]
+        return [SegmentationMetrics(num_classes=num_classes, **kwargs)]
+    
+    elif task_type == 'classification':
+        # Use built-in metrics for pure classification
+        metrics = [
+            tf.keras.metrics.CategoricalAccuracy(name='accuracy'),
+            tf.keras.metrics.TopKCategoricalAccuracy(k=5, name='top5_accuracy'),
+            tf.keras.metrics.Precision(name='precision'),
+            tf.keras.metrics.Recall(name='recall')
+        ]
+        return metrics
+    
     elif task_type == 'multitask':
-        return [MultiTaskMetrics(num_classes=num_classes)]
+        # Return both detection and segmentation metrics
+        return [
+            DetectionMetrics(name='detection', **kwargs),
+            SegmentationMetrics(num_classes=num_classes, name='segmentation', **kwargs)
+        ]
+    
     else:
-        raise ValueError(f"Unknown task type: {task_type}")
+        raise ValueError(f"Unknown task type: {task_type}. "
+                        f"Supported types: 'detection', 'segmentation', 'classification', 'multitask'")
 
 
-# Metric configuration presets
-DETECTION_METRICS_CONFIG = {
-    'iou_thresholds': [0.3, 0.5, 0.7],
-    'metrics': ['iou', 'mae', 'precision', 'recall', 'accuracy']
-}
-
-SEGMENTATION_METRICS_CONFIG = {
-    'metrics': ['dice', 'pixel_accuracy', 'mean_iou', 'categorical_accuracy']
-}
-
-MULTITASK_METRICS_CONFIG = {
-    'detection_weight': 0.5,
-    'segmentation_weight': 0.5,
-    'metrics': ['combined_iou', 'combined_accuracy', 'task_balance']
+# Simplified metric configurations
+METRIC_CONFIGS = {
+    'detection': {
+        'iou_threshold': 0.5,
+        'metrics': ['iou', 'bbox_mae', 'precision', 'recall', 'f1_score', 'cls_accuracy']
+    },
+    'segmentation': {
+        'metrics': ['pixel_accuracy', 'dice_coef', 'mean_iou']
+    },
+    'classification': {
+        'metrics': ['accuracy', 'top5_accuracy', 'precision', 'recall']
+    }
 }

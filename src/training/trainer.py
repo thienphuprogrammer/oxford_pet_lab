@@ -1,26 +1,16 @@
 from typing import Dict
 import tensorflow as tf
 
-from src.training.base import BaseTrainer
-
-from typing import Dict, Optional, Any, Tuple, Union
-import tensorflow as tf
-from tensorflow.keras import mixed_precision
-import numpy as np
-
-from src.training.base import BaseTrainer
-from src.models.base_model import BaseModel
 from src.config.config import Config
 from src.config.model_configs import ModelConfigs
+from src.models.base_model import BaseModel
+from src.training.losses import get_loss
+from src.training.optimizers import DetectionOptimizer
+from src.training.metrics import get_metrics
+from src.training.callbacks import get_optimized_callbacks
 
-
-class Trainer(BaseTrainer):
-    """
-    Main trainer implementation for single-task learning.
-    
-    Supports both detection and segmentation tasks with optimized training steps,
-    gradient accumulation, mixed precision, and comprehensive metrics tracking.
-    """
+class Trainer:
+    """Simplified and optimized trainer using TensorFlow's built-in features."""
     
     def __init__(
         self,
@@ -30,477 +20,170 @@ class Trainer(BaseTrainer):
         config: Optional[Config] = None,
         models_config: Optional[ModelConfigs] = None,
     ):
-        """
-        Initialize trainer with enhanced configuration.
+        self.model = model
+        self.task_type = task_type
+        self.config = config or Config()
+        self.models_config = models_config or ModelConfigs()
         
-        Args:
-            model: The model to train
-            task_type: Either 'detection' or 'segmentation'
-            backbone_name: Name of the backbone network
-            config: Training configuration
-            models_config: Model-specific configurations
-        """
-        super().__init__(model, task_type, backbone_name, config, models_config)
+        # Setup all components
+        self._setup_components(backbone_name)
         
-        # Task-specific setup
-        self._setup_task_specific_components()
+    def _setup_components(self, backbone_name: str):
+        """Setup all training components efficiently."""
+        # Optimizer
+        det_opt = DetectionOptimizer('retinanet', backbone_name)
+        self.optimizer = det_opt.create_optimizer(
+            optimizer_type=getattr(self.config, 'OPTIMIZER_TYPE', 'sgd'),
+            custom_lr=getattr(self.config, 'LEARNING_RATE', None),
+            batch_size=getattr(self.config, 'BATCH_SIZE', 16),
+            total_epochs=getattr(self.config, 'EPOCHS', 300),
+        )
         
-        # Initialize loss tracking
-        self._init_loss_tracking()
+        # Loss and metrics
+        self.loss_fn = get_sota_loss_function(
+            self.models_config.LOSS_CONFIGS[self.task_type]
+        )
+        self.metrics = get_metrics(self.task_type, self.config.NUM_CLASSES_DETECTION)
         
-    def _setup_task_specific_components(self):
-        """Setup components specific to the task type."""
-        if self.task_type == 'detection':
-            self._setup_detection_components()
-        elif self.task_type == 'segmentation':
-            self._setup_segmentation_components()
-        else:
-            raise ValueError(f"Unsupported task type: {self.task_type}")
+        # Mixed precision
+        if getattr(self.config, 'USE_MIXED_PRECISION', False):
+            tf.keras.mixed_precision.set_global_policy('mixed_float16')
+            self.optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.optimizer)
+        
+        # Memory optimization
+        self._setup_memory_optimization()
+        
+        # Callbacks (let TensorFlow handle most of them)
+        self.callbacks = self._get_callbacks(backbone_name)
+        
+    def _setup_memory_optimization(self):
+        """Setup memory optimization."""
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        if gpus:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        
+        if getattr(self.config, 'USE_XLA', False):
+            tf.config.optimizer.set_jit(True)
     
-    def _setup_detection_components(self):
-        """Setup detection-specific components."""
-        # Detection-specific metrics tracking
-        self.detection_metrics = {
-            'class_loss': tf.keras.metrics.Mean(name='class_loss'),
-            'bbox_loss': tf.keras.metrics.Mean(name='bbox_loss'),
-            'objectness_loss': tf.keras.metrics.Mean(name='objectness_loss'),
-        }
+    def _get_callbacks(self, backbone_name: str):
+        """Get optimized callbacks."""
+        log_dir = Path(self.config.LOGS_DIR)
+        log_dir.mkdir(parents=True, exist_ok=True)
         
-        # Add to main metrics list
-        self.all_metrics = list(self.detection_metrics.values()) + self.metrics
+        # Custom callbacks
+        custom_callbacks = get_optimized_callbacks(
+            self.task_type, backbone_name, 
+            self.config.PRETRAINED, self.config, self.models_config
+        )
         
-    def _setup_segmentation_components(self):
-        """Setup segmentation-specific components."""
-        # Segmentation-specific metrics
-        self.segmentation_metrics = {
-            'dice_loss': tf.keras.metrics.Mean(name='dice_loss'),
-            'focal_loss': tf.keras.metrics.Mean(name='focal_loss'),
-            'iou_metric': tf.keras.metrics.MeanIoU(
-                num_classes=self.config.NUM_CLASSES_SEGMENTATION,
-                name='mean_iou'
+        # Built-in TensorFlow callbacks
+        tf_callbacks = [
+            tf.keras.callbacks.TensorBoard(log_dir, histogram_freq=1),
+            tf.keras.callbacks.CSVLogger(log_dir / 'training.csv'),
+            tf.keras.callbacks.ModelCheckpoint(
+                log_dir / 'best_model.weights.h5',
+                monitor='val_loss', save_best_only=True, save_weights_only=True
             ),
-        }
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss', factor=0.1, patience=10, min_lr=1e-7
+            ),
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss', patience=20, restore_best_weights=True
+            )
+        ]
         
-        # Add to main metrics list
-        self.all_metrics = list(self.segmentation_metrics.values()) + self.metrics
-        
-    def _init_loss_tracking(self):
-        """Initialize comprehensive loss tracking."""
-        self.loss_components = tf.keras.metrics.Mean(name='total_loss')
-        
-        # Gradient norm tracking for debugging
-        self.gradient_norm = tf.keras.metrics.Mean(name='gradient_norm')
-        
-    def train_step(self, batch) -> Dict[str, tf.Tensor]:
-        """
-        Optimized training step with task-specific routing.
-        
-        Args:
-            batch: Input batch data
-            
-        Returns:
-            Dictionary containing loss and metric values
-        """
-        # Use the distributed training step from base class for consistency
-        return self._distributed_train_step(batch)
-        
-    def validation_step(self, batch) -> Dict[str, tf.Tensor]:
-        """
-        Optimized validation step with task-specific routing.
-        
-        Args:
-            batch: Input batch data
-            
-        Returns:
-            Dictionary containing validation loss and metrics
-        """
-        # Use the distributed validation step from base class
-        return self._distributed_val_step(batch)
+        return custom_callbacks + tf_callbacks
     
-    @tf.function(experimental_relax_shapes=True)
-    def _detection_train_step(self, batch) -> Dict[str, tf.Tensor]:
-        """
-        Optimized detection training step with gradient tape.
-        
-        Args:
-            batch: Batch containing images and detection targets
-            
-        Returns:
-            Dictionary with loss components and predictions
-        """
-        inputs, targets = self._unpack_detection_batch(batch)
+    @tf.function
+    def _train_step(self, batch):
+        """Unified training step for all task types."""
+        inputs, targets = batch
         
         with tf.GradientTape() as tape:
-            # Forward pass
             predictions = self.model(inputs, training=True)
+            loss = self.loss_fn(targets, predictions)
             
-            # Compute losses
-            loss_dict = self._compute_detection_losses(targets, predictions)
-            total_loss = loss_dict['total_loss']
-            
-            # Handle mixed precision scaling
-            if isinstance(self.optimizer, mixed_precision.LossScaleOptimizer):
-                scaled_loss = self.optimizer.get_scaled_loss(total_loss)
-            else:
-                scaled_loss = total_loss
+            # Handle mixed precision
+            if isinstance(self.optimizer, tf.keras.mixed_precision.LossScaleOptimizer):
+                loss = self.optimizer.get_scaled_loss(loss)
         
         # Compute and apply gradients
-        gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
-        
-        if isinstance(self.optimizer, mixed_precision.LossScaleOptimizer):
+        gradients = tape.gradient(loss, self.model.trainable_variables)
+        if isinstance(self.optimizer, tf.keras.mixed_precision.LossScaleOptimizer):
             gradients = self.optimizer.get_unscaled_gradients(gradients)
         
-        # Gradient clipping for stability
-        if hasattr(self.config, 'GRADIENT_CLIP_NORM') and self.config.GRADIENT_CLIP_NORM > 0:
-            gradients, grad_norm = tf.clip_by_global_norm(
-                gradients, self.config.GRADIENT_CLIP_NORM
-            )
-            self.gradient_norm.update_state(grad_norm)
-        
-        # Apply gradients
-        if self.gradient_accumulation_steps > 1:
-            self._accumulate_gradients(gradients)
-        else:
-            self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+        self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
         
         # Update metrics
-        self._update_detection_metrics(targets, predictions, loss_dict)
-        
-        return {
-            'loss': total_loss,
-            'predictions': predictions,
-            **loss_dict
-        }
-    
-    @tf.function(experimental_relax_shapes=True)
-    def _segmentation_train_step(self, batch) -> Dict[str, tf.Tensor]:
-        """
-        Optimized segmentation training step with gradient tape.
-        
-        Args:
-            batch: Batch containing images and segmentation masks
-            
-        Returns:
-            Dictionary with loss components and predictions
-        """
-        inputs, masks = self._unpack_segmentation_batch(batch)
-        
-        with tf.GradientTape() as tape:
-            # Forward pass
-            predictions = self.model(inputs, training=True)
-            
-            # Compute losses
-            loss_dict = self._compute_segmentation_losses(masks, predictions)
-            total_loss = loss_dict['total_loss']
-            
-            # Handle mixed precision scaling
-            if isinstance(self.optimizer, mixed_precision.LossScaleOptimizer):
-                scaled_loss = self.optimizer.get_scaled_loss(total_loss)
-            else:
-                scaled_loss = total_loss
-        
-        # Compute and apply gradients
-        gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
-        
-        if isinstance(self.optimizer, mixed_precision.LossScaleOptimizer):
-            gradients = self.optimizer.get_unscaled_gradients(gradients)
-        
-        # Gradient clipping
-        if hasattr(self.config, 'GRADIENT_CLIP_NORM') and self.config.GRADIENT_CLIP_NORM > 0:
-            gradients, grad_norm = tf.clip_by_global_norm(
-                gradients, self.config.GRADIENT_CLIP_NORM
-            )
-            self.gradient_norm.update_state(grad_norm)
-        
-        # Apply gradients
-        if self.gradient_accumulation_steps > 1:
-            self._accumulate_gradients(gradients)
+        if isinstance(self.metrics, list):
+            for metric in self.metrics:
+                metric.update_state(targets, predictions)
         else:
-            self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+            self.metrics.update_state(targets, predictions)
+        
+        return loss
+    
+    @tf.function
+    def _val_step(self, batch):
+        """Unified validation step for all task types."""
+        inputs, targets = batch
+        predictions = self.model(inputs, training=False)
+        loss = self.loss_fn(targets, predictions)
         
         # Update metrics
-        self._update_segmentation_metrics(masks, predictions, loss_dict)
-        
-        return {
-            'loss': total_loss,
-            'predictions': predictions,
-            **loss_dict
-        }
-    
-    @tf.function(experimental_relax_shapes=True)
-    def _detection_validation_step(self, batch) -> Dict[str, tf.Tensor]:
-        """
-        Optimized detection validation step.
-        
-        Args:
-            batch: Validation batch data
-            
-        Returns:
-            Dictionary with validation metrics
-        """
-        inputs, targets = self._unpack_detection_batch(batch)
-        
-        # Forward pass
-        predictions = self.model(inputs, training=False)
-        
-        # Compute losses
-        loss_dict = self._compute_detection_losses(targets, predictions)
-        
-        # Update validation metrics
-        self._update_detection_metrics(targets, predictions, loss_dict, is_validation=True)
-        
-        return {
-            'loss': loss_dict['total_loss'],
-            'predictions': predictions,
-            **loss_dict
-        }
-    
-    @tf.function(experimental_relax_shapes=True)
-    def _segmentation_validation_step(self, batch) -> Dict[str, tf.Tensor]:
-        """
-        Optimized segmentation validation step.
-        
-        Args:
-            batch: Validation batch data
-            
-        Returns:
-            Dictionary with validation metrics
-        """
-        inputs, masks = self._unpack_segmentation_batch(batch)
-        
-        # Forward pass
-        predictions = self.model(inputs, training=False)
-        
-        # Compute losses
-        loss_dict = self._compute_segmentation_losses(masks, predictions)
-        
-        # Update validation metrics
-        self._update_segmentation_metrics(masks, predictions, loss_dict, is_validation=True)
-        
-        return {
-            'loss': loss_dict['total_loss'],
-            'predictions': predictions,
-            **loss_dict
-        }
-    
-    def _unpack_detection_batch(self, batch) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
-        """
-        Unpack detection batch data.
-        
-        Args:
-            batch: Raw batch data
-            
-        Returns:
-            Tuple of (images, targets)
-        """
-        if isinstance(batch, dict):
-            return batch['inputs'], batch['targets']
-        elif isinstance(batch, (list, tuple)) and len(batch) == 2:
-            return batch[0], batch[1]
+        if isinstance(self.metrics, list):
+            for metric in self.metrics:
+                metric.update_state(targets, predictions)
         else:
-            raise ValueError(f"Unsupported batch format: {type(batch)}")
+            self.metrics.update_state(targets, predictions)
+        
+        return loss
     
-    def _unpack_segmentation_batch(self, batch) -> Tuple[tf.Tensor, tf.Tensor]:
-        """
-        Unpack segmentation batch data.
-        
-        Args:
-            batch: Raw batch data
-            
-        Returns:
-            Tuple of (images, masks)
-        """
-        if isinstance(batch, dict):
-            return batch['inputs'], batch['targets']
-        elif isinstance(batch, (list, tuple)) and len(batch) == 2:
-            return batch[0], batch[1]
-        else:
-            raise ValueError(f"Unsupported batch format: {type(batch)}")
-    
-    def _compute_detection_losses(
-        self, 
-        targets: Dict[str, tf.Tensor], 
-        predictions: Dict[str, tf.Tensor]
-    ) -> Dict[str, tf.Tensor]:
-        """
-        Compute detection losses with detailed breakdown.
-        
-        Args:
-            targets: Ground truth targets
-            predictions: Model predictions
-            
-        Returns:
-            Dictionary with individual and total losses
-        """
-        # Use the main loss function
-        total_loss = self.loss_fn(targets, predictions)
-        
-        # If loss function returns a dictionary, extract components
-        if isinstance(total_loss, dict):
-            loss_dict = total_loss
-            total_loss = sum(loss_dict.values())
-        else:
-            # Try to extract loss components if available
-            loss_dict = {
-                'classification_loss': total_loss * 0.6,  # Approximate breakdown
-                'localization_loss': total_loss * 0.4,
-            }
-        
-        loss_dict['total_loss'] = total_loss
-        return loss_dict
-    
-    def _compute_segmentation_losses(
-        self, 
-        masks: tf.Tensor, 
-        predictions: tf.Tensor
-    ) -> Dict[str, tf.Tensor]:
-        """
-        Compute segmentation losses with detailed breakdown.
-        
-        Args:
-            masks: Ground truth masks
-            predictions: Model predictions
-            
-        Returns:
-            Dictionary with individual and total losses
-        """
-        # Use the main loss function
-        total_loss = self.loss_fn(masks, predictions)
-        
-        # If loss function returns a dictionary, extract components
-        if isinstance(total_loss, dict):
-            loss_dict = total_loss
-            total_loss = sum(loss_dict.values())
-        else:
-            # Create approximate breakdown
-            loss_dict = {
-                'segmentation_loss': total_loss,
-            }
-        
-        loss_dict['total_loss'] = total_loss
-        return loss_dict
-    
-    def _update_detection_metrics(
-        self, 
-        targets: Dict[str, tf.Tensor], 
-        predictions: Dict[str, tf.Tensor],
-        loss_dict: Dict[str, tf.Tensor],
-        is_validation: bool = False
+    def fit(
+        self,
+        train_dataset: tf.data.Dataset,
+        val_dataset: Optional[tf.data.Dataset] = None,
+        epochs: int = 100
     ):
-        """Update detection-specific metrics."""
-        # Update loss component metrics
-        for loss_name, loss_value in loss_dict.items():
-            if loss_name in self.detection_metrics:
-                self.detection_metrics[loss_name].update_state(loss_value)
+        """Simplified training loop using TensorFlow's Model.fit approach."""
         
-        # Update main metrics
-        if isinstance(self.metrics, list):
-            for metric in self.metrics:
-                if hasattr(metric, 'update_state'):
-                    try:
-                        metric.update_state(targets, predictions)
-                    except Exception as e:
-                        tf.print(f"Metric update failed: {e}")
-        else:
-            if hasattr(self.metrics, 'update_state'):
-                self.metrics.update_state(targets, predictions)
+        # Optimize datasets
+        train_dataset = self._optimize_dataset(train_dataset, True)
+        if val_dataset:
+            val_dataset = self._optimize_dataset(val_dataset, False)
+        
+        # Compile model (let TensorFlow handle the training loop)
+        self.model.compile(
+            optimizer=self.optimizer,
+            loss=self.loss_fn,
+            metrics=self.metrics if isinstance(self.metrics, list) else [self.metrics]
+        )
+        
+        # Use TensorFlow's built-in fit method
+        history = self.model.fit(
+            train_dataset,
+            validation_data=val_dataset,
+            epochs=epochs,
+            callbacks=self.callbacks,
+            verbose=1
+        )
+        
+        return history
     
-    def _update_segmentation_metrics(
-        self, 
-        masks: tf.Tensor, 
-        predictions: tf.Tensor,
-        loss_dict: Dict[str, tf.Tensor],
-        is_validation: bool = False
-    ):
-        """Update segmentation-specific metrics."""
-        # Update loss component metrics
-        for loss_name, loss_value in loss_dict.items():
-            if loss_name in self.segmentation_metrics:
-                self.segmentation_metrics[loss_name].update_state(loss_value)
+    def _optimize_dataset(self, dataset: tf.data.Dataset, is_training: bool) -> tf.data.Dataset:
+        """Optimize dataset using TensorFlow best practices."""
+        batch_size = getattr(self.config, 'BATCH_SIZE', 16)
         
-        # Update IoU metric
-        if 'iou_metric' in self.segmentation_metrics:
-            # Convert predictions to class predictions
-            pred_classes = tf.argmax(predictions, axis=-1)
-            true_classes = tf.cast(masks, tf.int32)
-            self.segmentation_metrics['iou_metric'].update_state(true_classes, pred_classes)
+        if is_training:
+            dataset = dataset.shuffle(1000).repeat()
         
-        # Update main metrics
-        if isinstance(self.metrics, list):
-            for metric in self.metrics:
-                if hasattr(metric, 'update_state'):
-                    try:
-                        metric.update_state(masks, predictions)
-                    except Exception as e:
-                        tf.print(f"Metric update failed: {e}")
-        else:
-            if hasattr(self.metrics, 'update_state'):
-                self.metrics.update_state(masks, predictions)
-    
-    def get_metrics_summary(self) -> Dict[str, float]:
-        """
-        Get comprehensive metrics summary.
+        dataset = dataset.batch(batch_size, drop_remainder=is_training)
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
         
-        Returns:
-            Dictionary with all current metric values
-        """
-        summary = {}
-        
-        # Main metrics
-        summary['train_loss'] = float(self.train_loss.result())
-        summary['val_loss'] = float(self.val_loss.result())
-        
-        # Task-specific metrics
-        if self.task_type == 'detection':
-            for name, metric in self.detection_metrics.items():
-                summary[f'train_{name}'] = float(metric.result())
-        elif self.task_type == 'segmentation':
-            for name, metric in self.segmentation_metrics.items():
-                summary[f'train_{name}'] = float(metric.result())
-        
-        # Custom metrics
-        if isinstance(self.metrics, list):
-            for metric in self.metrics:
-                if hasattr(metric, 'result') and hasattr(metric, 'name'):
-                    summary[metric.name] = float(metric.result())
-        else:
-            if hasattr(self.metrics, 'result') and hasattr(self.metrics, 'name'):
-                summary[self.metrics.name] = float(self.metrics.result())
-        
-        # Gradient norm if available
-        if hasattr(self, 'gradient_norm'):
-            summary['gradient_norm'] = float(self.gradient_norm.result())
-        
-        return summary
-    
-    def reset_metrics(self):
-        """Reset all metrics for new epoch."""
-        # Reset base metrics
-        self.train_loss.reset_state()
-        self.val_loss.reset_state()
-        
-        # Reset task-specific metrics
-        if self.task_type == 'detection':
-            for metric in self.detection_metrics.values():
-                if hasattr(metric, 'reset_state'):
-                    metric.reset_state()
-        elif self.task_type == 'segmentation':
-            for metric in self.segmentation_metrics.values():
-                if hasattr(metric, 'reset_state'):
-                    metric.reset_state()
-        
-        # Reset custom metrics
-        if isinstance(self.metrics, list):
-            for metric in self.metrics:
-                if hasattr(metric, 'reset_state'):
-                    metric.reset_state()
-        else:
-            if hasattr(self.metrics, 'reset_state'):
-                self.metrics.reset_state()
-        
-        # Reset gradient norm
-        if hasattr(self, 'gradient_norm'):
-            self.gradient_norm.reset_state()
+        return dataset
+
+
 
 class MultiTaskTrainer(BaseTrainer):
     """Enhanced multitask trainer with advanced features."""
