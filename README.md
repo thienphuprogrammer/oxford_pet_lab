@@ -49,12 +49,12 @@ Object detection and semantic segmentation are fundamental computer vision probl
 
 ### Dataset Analysis and Visualization
 
-![Class distribution](figures/class_distribution.png)  
+![Class distribution](results/plots/class_distribution.png)  
 *Class distribution in Oxford-IIIT Pet Dataset.*
 
 | Example Bounding Box | Segmentation Mask Overlay |
 |:-------------------:|:------------------------:|
-| ![](figures/bbox_example.png) | ![](figures/mask_overlay.png) |
+| ![](results/plots/bbox_example.png) | ![](results/plots/mask_overlay.png) |
 
 ---
 
@@ -110,8 +110,8 @@ Object detection and semantic segmentation are fundamental computer vision probl
 
 *Detection performance (fill with your results).*
 
-![Detection loss curve](figures/detection_loss_curve.png)  
-*Training/validation loss for detection models.*
+![Detection loss curve](results/plots/dectection/PretrainedDetectionModel(EffNetV2B0).png)  
+*Training/validation loss for detection SimpleDetectionModel (scratch) models.*
 
 #### Discussion and Evaluation
 
@@ -168,11 +168,11 @@ Object detection and semantic segmentation are fundamental computer vision probl
 
 | Training Loss | Validation mIoU |
 |:-------------:|:--------------:|
-| ![](figures/segmentation_loss_curve.png) | ![](figures/segmentation_miou_curve.png) |
+| ![](results/plots/segmentation_loss_curve.png) | ![](results/plots/segmentation_miou_curve.png) |
 
 | Qualitative Results |
 |:-------------------:|
-| ![](figures/seg_pred_1.png) ![](figures/seg_pred_2.png) ![](figures/seg_pred_3.png) ![](figures/seg_pred_4.png) |
+| ![](results/plots/seg_pred_1.png) ![](results/plots/seg_pred_2.png) ![](results/plots/seg_pred_3.png) ![](results/plots/seg_pred_4.png) |
 
 #### Discussion and Evaluation
 
@@ -205,7 +205,7 @@ We implemented a multitask learning framework that jointly performs object detec
   where $\alpha$ and $\beta$ are balancing hyperparameters.
 - **Optimization:** End-to-end Adam optimizer with scheduling, consistent augmentations.
 
-![Multitask architecture](figures/multitask_architecture.png)  
+![Multitask architecture](results/plots/multitask_architecture.png)  
 *Architecture of multitask model: shared backbone, dual-task heads, joint training.*
 
 ### My Result
@@ -218,7 +218,7 @@ We implemented a multitask learning framework that jointly performs object detec
 
 | Multitask Loss | Segmentation mIoU |
 |:-------------:|:-----------------:|
-| ![](figures/multitask_loss_curve.png) | ![](figures/multitask_miou_curve.png) |
+| ![](results/plots/multitask_loss_curve.png) | ![](results/plots/multitask_miou_curve.png) |
 
 #### Discussion and Evaluation
 
