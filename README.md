@@ -110,7 +110,7 @@ Object detection and semantic segmentation are fundamental computer vision probl
 
 *Detection performance (fill with your results).*
 
-![Detection loss curve](results/plots/dectection/PretrainedDetectionModel(EffNetV2B0).png)  
+![Detection loss curve](./results/plots/dectection/PretrainedDetectionModel(EffNetV2B0).png)  
 *Training/validation loss for detection SimpleDetectionModel (scratch) models.*
 
 #### Discussion and Evaluation
