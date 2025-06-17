@@ -30,22 +30,12 @@ class UniversalTrainer:
         """Get optimizer tối ưu cho từng task"""
         if optimizer_type == 'auto':
             optimizer_type = {
-                'detection': 'adamw',
-                'segmentation': 'lamb', 
-                'multitask': 'lookahead'
+                'detection': SOTAOptimizers.get_detection_optimizer(),
+                'segmentation': SOTAOptimizers.get_segmentation_optimizer(), 
+                'multitask': SOTAOptimizers.get_multitask_optimizer()
             }[self.task_type]
         
-        optimizers_map = {
-            'adamw': tf.keras.optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4),
-            'lamb': tf.keras.optimizers.Lamb(learning_rate=learning_rate),
-            'lookahead': tf.keras.optimizers.Lookahead(
-                tf.keras.optimizers.AdamW(learning_rate=learning_rate)
-            ),
-            'sgd': tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=0.9),
-            'adam': tf.keras.optimizers.Adam(learning_rate=learning_rate)
-        }
-        
-        return optimizers_map.get(optimizer_type, keras.optimizers.Adam(learning_rate))
+        return optimizer_type
     
     # === LOSSES ===
     def get_loss(self, loss_type: str = 'auto'):
