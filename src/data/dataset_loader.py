@@ -455,6 +455,7 @@ class OxfordPetDatasetLoader:
         
         plt.tight_layout()
         plt.show()
+        plt.savefig('results/plots/dataset/samples.png')
     
     def get_sample_data(self, split: str = 'train', num_samples: int = 5) -> List[Dict]:
         """

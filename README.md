@@ -49,7 +49,7 @@ Object detection and semantic segmentation are fundamental computer vision probl
 
 ### Dataset Analysis and Visualization
 
-![Class distribution](results/plots/class_distribution.png)  
+![Class distribution](results/plots/dataset/samples.png)  
 *Class distribution in Oxford-IIIT Pet Dataset.*
 
 | Example Bounding Box | Segmentation Mask Overlay |
