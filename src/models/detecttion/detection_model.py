@@ -380,35 +380,52 @@ class PretrainedDetectionModel(BaseDetectionModel):
         """Build detection head"""
         def detection_head(features):
             # Ensure features are float32
-            features = tf.cast(features, tf.float32)
+            features = [tf.cast(f, tf.float32) for f in features]
             
-            # Detection subnet
-            x = features
-            for _ in range(4):  # 4 conv layers
-                x = layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32)(x)
+            # Process each scale
+            bbox_outputs = []
+            for feature in features:
+                x = feature
+                # Detection subnet
+                for _ in range(4):  # 4 conv layers
+                    x = layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32)(x)
+                
+                # Bbox regression
+                bbox_out = layers.Conv2D(4, 3, padding='same', dtype=tf.float32)(x)
+                bbox_out = layers.GlobalAveragePooling2D()(bbox_out)
+                bbox_outputs.append(bbox_out)
             
-            # Bbox regression
-            bbox_out = layers.Conv2D(4, 3, padding='same', dtype=tf.float32)(x)
-            bbox_out = layers.GlobalAveragePooling2D()(bbox_out)
-            return bbox_out
+            # Combine outputs from different scales
+            if len(bbox_outputs) > 1:
+                return layers.Average()(bbox_outputs)
+            return bbox_outputs[0]
         return detection_head
     
     def _build_classification_head(self):
         """Build classification head"""
         def classification_head(features):
             # Ensure features are float32
-            features = tf.cast(features, tf.float32)
+            features = [tf.cast(f, tf.float32) for f in features]
             
-            # Classification subnet
-            x = features
-            for _ in range(4):  # 4 conv layers
-                x = layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32)(x)
+            # Process each scale
+            class_outputs = []
+            for feature in features:
+                x = feature
+                # Classification subnet
+                for _ in range(4):  # 4 conv layers
+                    x = layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32)(x)
+                
+                # Classification
+                class_out = layers.Conv2D(self.num_classes, 3, padding='same', dtype=tf.float32)(x)
+                class_out = layers.GlobalAveragePooling2D()(class_out)
+                class_outputs.append(class_out)
             
-            # Classification
-            class_out = layers.Conv2D(self.num_classes, 3, padding='same', dtype=tf.float32)(x)
-            class_out = layers.GlobalAveragePooling2D()(class_out)
-            class_out = layers.Activation('softmax', name='class_output')(class_out)
-            return class_out
+            # Combine outputs from different scales
+            if len(class_outputs) > 1:
+                combined = layers.Average()(class_outputs)
+            else:
+                combined = class_outputs[0]
+            return layers.Activation('softmax', name='class_output')(combined)
         return classification_head
     
     def call(self, inputs, training=None):
