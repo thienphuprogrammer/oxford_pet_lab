@@ -89,63 +89,75 @@ class FPN(layers.Layer):
 
 
 class BiFPN(layers.Layer):
-            def __init__(self, feature_dim=64, **kwargs):
-                super().__init__(**kwargs)
-                self.feature_dim = feature_dim
-                
-            def build(self, input_shape):
-                num_levels = len(input_shape)
-                
-                # Resizing convs to match feature dimensions
-                self.resample_convs = []
-                for i in range(num_levels):
-                    conv = layers.Conv2D(self.feature_dim, 1, padding='same', name=f'resample_{i}')
-                    self.resample_convs.append(conv)
-                
-                # BiFPN convs
-                self.bifpn_convs = []
-                for i in range(num_levels):
-                    conv = layers.Conv2D(self.feature_dim, 3, padding='same', name=f'bifpn_{i}')
-                    self.bifpn_convs.append(conv)
-                
-                super().build(input_shape)
-            
-            def call(self, inputs):
-                # Resample all inputs to same channel dimension
-                resampled = []
-                for i, inp in enumerate(inputs):
-                    resampled.append(self.resample_convs[i](inp))
-                
-                # Top-down path
-                top_down = []
-                prev = resampled[-1]  # Start from lowest resolution
-                top_down.append(prev)
-                
-                for i in range(len(resampled) - 2, -1, -1):
-                    # Upsample and add
-                    target_shape = tf.shape(resampled[i])[1:3]
-                    upsampled = tf.image.resize(prev, target_shape)
-                    upsampled = tf.cast(upsampled, resampled[i].dtype)
-                    merged = resampled[i] + upsampled
-                    top_down.insert(0, merged)
-                    prev = merged
-                
-                # Bottom-up path
-                bottom_up = []
-                prev = top_down[0]  # Start from highest resolution
-                bottom_up.append(self.bifpn_convs[0](prev))
-                
-                for i in range(1, len(top_down)):
-                    # Downsample and add
-                    target_shape = tf.shape(top_down[i])[1:3]
-                    downsampled = layers.MaxPooling2D(pool_size=2)(prev)
-                    downsampled = tf.image.resize(downsampled, target_shape)
-                    downsampled = tf.cast(downsampled, top_down[i].dtype)
-                    merged = top_down[i] + downsampled
-                    bottom_up.append(self.bifpn_convs[i](merged))
-                    prev = merged
-                
-                return bottom_up
+    def __init__(self, feature_dim=256, num_layers=3, dtype=tf.float32, **kwargs):
+        super().__init__(dtype=dtype, **kwargs)
+        self.feature_dim = feature_dim
+        self.num_layers = num_layers
+        
+    def build(self, input_shape):
+        num_levels = len(input_shape)
+        
+        # Resizing convs to match feature dimensions
+        self.resample_convs = []
+        for i in range(num_levels):
+            conv = layers.Conv2D(
+                self.feature_dim, 1, padding='same',
+                name=f'resample_{i}',
+                dtype=self.dtype
+            )
+            self.resample_convs.append(conv)
+        
+        # BiFPN convs
+        self.bifpn_convs = []
+        for i in range(num_levels):
+            conv = layers.Conv2D(
+                self.feature_dim, 3, padding='same',
+                name=f'bifpn_{i}',
+                dtype=self.dtype
+            )
+            self.bifpn_convs.append(conv)
+        
+        super().build(input_shape)
+    
+    def call(self, inputs):
+        # Ensure inputs are float32
+        inputs = [tf.cast(inp, self.dtype) for inp in inputs]
+        
+        # Resample all inputs to same channel dimension
+        resampled = []
+        for i, inp in enumerate(inputs):
+            resampled.append(self.resample_convs[i](inp))
+        
+        # Top-down path
+        top_down = []
+        prev = resampled[-1]  # Start from lowest resolution
+        top_down.append(prev)
+        
+        for i in range(len(resampled) - 2, -1, -1):
+            # Upsample and add
+            target_shape = tf.shape(resampled[i])[1:3]
+            upsampled = tf.image.resize(prev, target_shape)
+            upsampled = tf.cast(upsampled, self.dtype)
+            merged = resampled[i] + upsampled
+            top_down.insert(0, merged)
+            prev = merged
+        
+        # Bottom-up path
+        bottom_up = []
+        prev = top_down[0]  # Start from highest resolution
+        bottom_up.append(self.bifpn_convs[0](prev))
+        
+        for i in range(1, len(top_down)):
+            # Downsample and add
+            target_shape = tf.shape(top_down[i])[1:3]
+            downsampled = layers.MaxPooling2D(pool_size=2, dtype=self.dtype)(prev)
+            downsampled = tf.image.resize(downsampled, target_shape)
+            downsampled = tf.cast(downsampled, self.dtype)
+            merged = top_down[i] + downsampled
+            bottom_up.append(self.bifpn_convs[i](merged))
+            prev = merged
+        
+        return bottom_up
 
 
 # src/models/detection/heads.py

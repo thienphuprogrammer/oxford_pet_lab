@@ -238,6 +238,9 @@ class PretrainedDetectionModel(BaseDetectionModel):
         self.backbone_name = self.config.BACKBONE
         self._init_params()
         
+        # Set mixed precision policy to float32
+        tf.keras.mixed_precision.set_global_policy('float32')
+        
         self.backbone = self._build_backbone()
         # Build BiFPN neck for feature fusion
         self.bifpn = self._build_bifpn()
@@ -366,85 +369,70 @@ class PretrainedDetectionModel(BaseDetectionModel):
         return feature_extractor
     
     def _build_bifpn(self):
-        """Build Bidirectional Feature Pyramid Network"""
-        return BiFPN(feature_dim=64)
+        """Build BiFPN for feature fusion"""
+        return BiFPN(
+            feature_dim=256,
+            num_layers=3,
+            dtype=tf.float32  # Explicitly set dtype to float32
+        )
     
     def _build_detection_head(self):
-        """Build detection head for multi-scale features without creating new variables each call."""
-        # Instantiate layers once and reuse.
-        det_convs = [
-            layers.Conv2D(64, 3, padding='same', activation='swish', name=f'det_conv_{i}')
-            for i in range(3)
-        ]
-        det_bbox_conv = layers.Conv2D(4, 3, padding='same', name='det_bbox_conv')
-        det_gap = layers.GlobalAveragePooling2D(name='det_gap')
-        det_avg = layers.Average(name='det_avg')
-
+        """Build detection head"""
         def detection_head(features):
-            bbox_outputs = []
-            for feature in features:
-                x = feature
-                # Detection subnet (shared weights across scales)
-                for conv in det_convs:
-                    x = conv(x)
-                bbox_out = det_bbox_conv(x)
-                bbox_out = det_gap(bbox_out)
-                bbox_outputs.append(bbox_out)
-            # Weighted combination across scales
-            if len(bbox_outputs) > 1:
-                combined = det_avg(bbox_outputs)
-            else:
-                combined = bbox_outputs[0]
-            return combined
-
+            # Ensure features are float32
+            features = tf.cast(features, tf.float32)
+            
+            # Detection subnet
+            x = features
+            for _ in range(4):  # 4 conv layers
+                x = layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32)(x)
+            
+            # Bbox regression
+            bbox_out = layers.Conv2D(4, 3, padding='same', dtype=tf.float32)(x)
+            bbox_out = layers.GlobalAveragePooling2D()(bbox_out)
+            return bbox_out
         return detection_head
     
     def _build_classification_head(self):
-        """Build classification head for multi-scale features without recreating variables on each call."""
-        cls_convs = [
-            layers.Conv2D(64, 3, padding='same', activation='swish', name=f'cls_conv_{i}')
-            for i in range(3)
-        ]
-        cls_head_conv = layers.Conv2D(self.num_classes, 3, padding='same', name='cls_head_conv')
-        cls_gap = layers.GlobalAveragePooling2D(name='cls_gap')
-        cls_avg = layers.Average(name='cls_avg')
-        cls_softmax = layers.Activation('softmax', name='class_output')
-
+        """Build classification head"""
         def classification_head(features):
-            class_outputs = []
-            for feature in features:
-                x = feature
-                for conv in cls_convs:
-                    x = conv(x)
-                class_out = cls_head_conv(x)
-                class_out = cls_gap(class_out)
-                class_outputs.append(class_out)
-            if len(class_outputs) > 1:
-                combined = cls_avg(class_outputs)
-            else:
-                combined = class_outputs[0]
-            combined = cls_softmax(combined)
-            return combined
-
+            # Ensure features are float32
+            features = tf.cast(features, tf.float32)
+            
+            # Classification subnet
+            x = features
+            for _ in range(4):  # 4 conv layers
+                x = layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32)(x)
+            
+            # Classification
+            class_out = layers.Conv2D(self.num_classes, 3, padding='same', dtype=tf.float32)(x)
+            class_out = layers.GlobalAveragePooling2D()(class_out)
+            class_out = layers.Activation('softmax', name='class_output')(class_out)
+            return class_out
         return classification_head
     
     def call(self, inputs, training=None):
-        """Forward pass – returns a dict aligned with training targets.
-        Keys: bbox, label, species (duplicate label for compatibility).
-        """
-        # Extract multi-scale features
-        backbone_features = self.backbone(inputs, training=training)
+        """Forward pass for detection model"""
+        # Ensure input is float32
+        inputs = tf.cast(inputs, tf.float32)
         
-        # BiFPN feature fusion
-        bifpn_features = self.bifpn(backbone_features)
+        # Get backbone features
+        features = self.backbone(inputs)
         
-        # Detection and classification
-        bbox_output = self.detection_head(bifpn_features)
-        class_output = self.classification_head(bifpn_features)
+        # Apply BiFPN
+        features = self.bifpn(features)
+        
+        # Get detection outputs
+        bbox_output = self.detection_head(features)
+        class_output = self.classification_head(features)
+        
+        # Ensure consistent shapes and dtype
+        bbox_output = tf.cast(tf.reshape(bbox_output, [-1, 4]), tf.float32)
+        class_output = tf.cast(tf.reshape(class_output, [-1, self.num_classes]), tf.float32)
         
         return {
             'bbox': bbox_output,
-            'label': class_output,
+            'label': class_output
         }
 
 
