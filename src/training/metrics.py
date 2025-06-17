@@ -344,10 +344,35 @@ class DetectionMetrics(tf.keras.metrics.Metric):
         cls_true = _get_first(y_true, ['class', 'cls', 'label', 'pet_class', 'species', 'class_output'])
         cls_pred = _get_first(y_pred, ['class', 'cls', 'label', 'class_output', 'species'])
         if cls_true is not None and cls_pred is not None:
-            # Convert integer labels to one-hot if required
-            if len(cls_true.shape) == 1 or (len(cls_true.shape) == 2 and cls_true.shape[-1] == 1):
-                num_classes = tf.reduce_max(cls_true) + 1
-                cls_true = tf.squeeze(tf.one_hot(tf.cast(cls_true, tf.int32), depth=num_classes))
+            # Convert integer labels to one-hot if required while keeping a *static* rank.
+            # Using tf.squeeze without specifying an axis on tensors whose shapes are not fully
+            # defined can result in tensors with an *unknown* rank inside a `tf.function`, which
+            # subsequently breaks `tf.keras.metrics.CategoricalAccuracy` (it requires a statically
+            # known rank). The following logic therefore:
+            #   1. Removes a trailing singleton class dimension **explicitly** (axis = -1) when it
+            #      exists (e.g. labels shaped `[batch, 1]`).
+            #   2. Converts rank-1 label tensors to one-hot using the number of classes inferred from
+            #      the predictions’ last dimension. This guarantees the resulting tensor has rank 2
+            #      (`[batch, num_classes]`) with a statically known rank.
+            if cls_true.shape.rank is not None:
+                # Explicitly squeeze the trailing singleton dimension, if present.
+                if cls_true.shape.rank == 2 and cls_true.shape[-1] == 1:
+                    cls_true = tf.squeeze(cls_true, axis=-1)
+            else:
+                # Fallback for completely dynamic shape – try squeezing via tf.cond on runtime rank.
+                cls_rank = tf.rank(cls_true)
+                cls_true = tf.cond(
+                    tf.logical_and(tf.equal(cls_rank, 2), tf.equal(tf.shape(cls_true)[-1], 1)),
+                    lambda: tf.squeeze(cls_true, axis=-1),
+                    lambda: cls_true,
+                )
+
+            # After the potential squeeze, if the labels are still rank-1 (integer class ids),
+            # convert them to one-hot representation so that their rank matches `cls_pred`.
+            if cls_true.shape.rank == 1:
+                num_classes = tf.shape(cls_pred)[-1]
+                cls_true = tf.one_hot(tf.cast(cls_true, tf.int32), depth=num_classes, dtype=tf.float32)
+
             self.classification_acc.update_state(cls_true, cls_pred)
 
     

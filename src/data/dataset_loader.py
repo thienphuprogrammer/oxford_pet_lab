@@ -159,8 +159,17 @@ class OxfordPetDatasetLoader:
             
             # Handle single split case
             if len(splits) == 1:
+                # When only one split is requested, `tfds.load` returns a single
+                # `tf.data.Dataset` or a length-1 list depending on whether the
+                # original `split` argument was a string or a list. We need to
+                # normalise this so that the dictionary value is always a
+                # `tf.data.Dataset` instance.
+                if isinstance(datasets, list):
+                    datasets = datasets[0]
                 datasets = {splits[0]: datasets}
             else:
+                # `tfds.load` returns a list whose ordering matches the `splits`
+                # argument, so we can safely zip the two together.
                 datasets = dict(zip(splits, datasets))
             
             self._raw_datasets.update(datasets)

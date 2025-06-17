@@ -14,7 +14,7 @@ _SHARP_KERNEL = tf.reshape(
 )
 
 class DataPreprocessor:
-    """Enhanced data preprocessing utilities for Oxford Pet dataset with performance optimizations."""
+    """Enhanced data preprocessing utilities for Oxford Pet dataset with guaranteed output format."""
     
     def __init__(self, config: Config = None, shuffle_buffer: int = 1000):
         self.config = config or Config()
@@ -36,6 +36,81 @@ class DataPreprocessor:
         self.pad_to_square = getattr(config, 'PAD_TO_SQUARE', True)
         self.enable_quality_enhancement = getattr(config, 'ENABLE_QUALITY_ENHANCEMENT', False)
         self.normalize_method = getattr(config, 'NORMALIZE_METHOD', 'standard')
+
+    @tf.function
+    def _ensure_input_format(self, sample: Dict[str, Any]) -> Dict[str, tf.Tensor]:
+        """Ensure input sample has the correct format and types."""
+        formatted_sample = {}
+        
+        # Image: ensure uint8 and 3D shape (H, W, 3)
+        image = sample['image']
+        if image.dtype != tf.uint8:
+            if image.dtype == tf.float32 or image.dtype == tf.float64:
+                # Convert from float [0,1] to uint8 [0,255]
+                image = tf.cast(tf.clip_by_value(image * 255.0, 0, 255), tf.uint8)
+            else:
+                image = tf.cast(image, tf.uint8)
+        
+        # Ensure 3D shape (H, W, 3)
+        if len(image.shape) == 4:  # Remove batch dimension if present
+            image = tf.squeeze(image, 0)
+        if len(image.shape) == 2:  # Add channel dimension for grayscale
+            image = tf.stack([image, image, image], axis=-1)
+        elif image.shape[-1] == 1:  # Convert single channel to 3 channels
+            image = tf.tile(image, [1, 1, 3])
+        elif image.shape[-1] == 4:  # Remove alpha channel
+            image = image[..., :3]
+        
+        formatted_sample['image'] = image
+        
+        # Head bbox: ensure float32 and shape (4,)
+        bbox = sample['head_bbox']
+        bbox = tf.cast(bbox, tf.float32)
+        bbox = tf.reshape(bbox, [4])  # Ensure exactly 4 elements
+        formatted_sample['head_bbox'] = bbox
+        
+        # Segmentation mask: ensure uint8 and 3D shape (H, W, 1)
+        mask = sample['segmentation_mask']
+        if mask.dtype != tf.uint8:
+            if mask.dtype == tf.float32 or mask.dtype == tf.float64:
+                # Convert from float to uint8
+                mask = tf.cast(tf.clip_by_value(mask, 0, 255), tf.uint8)
+            else:
+                mask = tf.cast(mask, tf.uint8)
+        
+        # Ensure 3D shape (H, W, 1)
+        if len(mask.shape) == 4:  # Remove batch dimension if present
+            mask = tf.squeeze(mask, 0)
+        if len(mask.shape) == 2:  # Add channel dimension
+            mask = tf.expand_dims(mask, -1)
+        elif len(mask.shape) == 3 and mask.shape[-1] != 1:
+            mask = tf.expand_dims(mask[..., 0], -1)  # Take first channel
+        
+        formatted_sample['segmentation_mask'] = mask
+        
+        # Label: ensure int64 and scalar
+        label = sample['label']
+        label = tf.cast(label, tf.int64)
+        if len(label.shape) > 0:
+            label = tf.squeeze(label)
+        formatted_sample['label'] = label
+        
+        # Species: ensure int64 and scalar
+        species = sample['species']
+        species = tf.cast(species, tf.int64)
+        if len(species.shape) > 0:
+            species = tf.squeeze(species)
+        formatted_sample['species'] = species
+        
+        # File name: ensure string
+        file_name = sample['file_name']
+        if isinstance(file_name, bytes):
+            file_name = tf.py_function(lambda x: x.decode('utf-8'), [file_name], tf.string)
+        elif not isinstance(file_name, tf.Tensor) or file_name.dtype != tf.string:
+            file_name = tf.cast(file_name, tf.string)
+        formatted_sample['file_name'] = file_name
+        
+        return formatted_sample
 
     @tf.function
     def resize_pad(self, image, target_size):
@@ -114,7 +189,6 @@ class DataPreprocessor:
         bbox_nrm = tf.clip_by_value(bbox_nrm, 0.0, 1.0)
         return bbox_nrm, bbox_abs
 
-
     @tf.function
     def process_segmentation_mask(self,
                                   mask: tf.Tensor,
@@ -124,6 +198,8 @@ class DataPreprocessor:
         th, tw = target_size or (self._target_h, self._target_w)
 
         # ensure 2-D
+        if mask.shape.rank == 2:
+            mask = mask[..., tf.newaxis]
         if mask.shape.rank == 3 and mask.shape[-1] == 1:
             mask = tf.squeeze(mask, -1)
 
@@ -143,7 +219,6 @@ class DataPreprocessor:
         mask = tf.clip_by_value(mask, 0.0, 3.0)  # 0-3
         mask = mask - 1.0                         # 0:BG,1:FG,2:Border
         return mask
-
 
     @tf.function
     def apply_quality_enhancement(self, image: tf.Tensor) -> tf.Tensor:
@@ -165,25 +240,15 @@ class DataPreprocessor:
 
     @tf.function
     def preprocess_sample(self, sample: Dict[str, Any]) -> Dict[str, tf.Tensor]:
-        """Optimized preprocessing with better error handling and performance.
+        """Optimized preprocessing with guaranteed output format."""
+        # First, ensure input format is correct
+        formatted_sample = self._ensure_input_format(sample)
         
-        Args:
-            sample: Dictionary containing:
-                - 'image': Image tensor with shape (H, W, 3) and dtype uint8
-                - 'head_bbox': BBox tensor with shape (4,) and dtype float32
-                - 'segmentation_mask': Mask tensor with shape (H, W, 1) and dtype uint8
-                - 'label': ClassLabel with dtype int64 (37 classes)
-                - 'species': ClassLabel with dtype int64 (2 classes: cat/dog)
-                - 'file_name': Text string
-        
-        Returns:
-            Dictionary with processed tensors
-        """
         # Get original image dimensions
-        original_shape = tf.shape(sample['image'])
+        original_shape = tf.shape(formatted_sample['image'])
         
         # Process image with smart resizing
-        image = self.smart_resize(sample['image'])
+        image = self.smart_resize(formatted_sample['image'])
         
         # Apply quality enhancement if enabled
         if self.enable_quality_enhancement:
@@ -194,19 +259,19 @@ class DataPreprocessor:
         
         # Process bounding box with advanced transformation
         bbox_normalized, bbox_absolute = self._transform_bbox(
-            sample['head_bbox'], original_shape
+            formatted_sample['head_bbox'], original_shape
         )
         
         # Process segmentation mask
-        seg_mask = self.process_segmentation_mask(sample['segmentation_mask'])
+        seg_mask = self.process_segmentation_mask(formatted_sample['segmentation_mask'])
         
         # Validate bbox coordinates
         bbox_area = (bbox_normalized[2] - bbox_normalized[0]) * (bbox_normalized[3] - bbox_normalized[1])
         valid_bbox = tf.logical_and(bbox_area > 0.001, bbox_area < 1.0)  # Reasonable area range
         
         # Process labels
-        pet_class = tf.cast(sample['label'], tf.int32)  # 37 pet breed classes
-        species = tf.cast(sample['species'], tf.int32)  # 2 species classes (cat/dog)
+        pet_class = tf.cast(formatted_sample['label'], tf.int32)  # 37 pet breed classes
+        species = tf.cast(formatted_sample['species'], tf.int32)  # 2 species classes (cat/dog)
         
         # Create comprehensive output
         processed_sample = {
@@ -219,19 +284,17 @@ class DataPreprocessor:
             'species': species,      # 2 species classes
             'original_shape': tf.cast(original_shape, tf.float32),
             'target_shape': self.img_size_float,
-            'file_name': sample['file_name'],
+            'file_name': formatted_sample['file_name'],
         }
         
         return processed_sample
 
-
     def _compute_bbox_area(self, bbox: tf.Tensor) -> tf.Tensor:
-            xmin, ymin, xmax, ymax = tf.unstack(bbox, axis=-1)
-            return (xmax - xmin) * (ymax - ymin)
-    
+        xmin, ymin, xmax, ymax = tf.unstack(bbox, axis=-1)
+        return (xmax - xmin) * (ymax - ymin)
 
     def create_detection_target(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
-        """Detection targets with additional metasrc.data."""
+        """Detection targets with additional metadata."""
         image = processed_sample['image']
         targets = {
             'bbox': processed_sample['bbox'],
@@ -243,16 +306,17 @@ class DataPreprocessor:
         return image, targets
 
     def create_segmentation_target(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
-        """Segmentation targets with additional metasrc.data."""
+        """Segmentation targets with additional metadata."""
         image = processed_sample['image']
         mask = processed_sample['segmentation_mask']
         
         # Compute class weights for balanced training
         # Classes: 0=background, 1=foreground, 2=boundary
+        mask2d = tf.squeeze(mask, -1)
         class_counts = tf.stack([
-            tf.reduce_sum(tf.cast(tf.equal(mask, 0.0), tf.float32)),  # background
-            tf.reduce_sum(tf.cast(tf.equal(mask, 1.0), tf.float32)),  # foreground
-            tf.reduce_sum(tf.cast(tf.equal(mask, 2.0), tf.float32)),  # boundary
+            tf.reduce_sum(tf.cast(tf.equal(mask2d, 0.0), tf.float32)),  # background
+            tf.reduce_sum(tf.cast(tf.equal(mask2d, 1.0), tf.float32)),  # foreground
+            tf.reduce_sum(tf.cast(tf.equal(mask2d, 2.0), tf.float32)),  # boundary
         ])
         
         total_pixels = tf.reduce_prod(tf.cast(tf.shape(mask), tf.float32))
@@ -267,7 +331,7 @@ class DataPreprocessor:
         return image, targets
 
     def create_multitask_target(self, processed_sample: Dict[str, tf.Tensor]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
-        """Multitask targets with comprehensive metasrc.data."""
+        """Multitask targets with comprehensive metadata."""
         image = processed_sample['image']
         targets = {
             'bbox': processed_sample['bbox'],
@@ -288,9 +352,35 @@ class DataPreprocessor:
         }
         return image, targets
 
+    @tf.function
+    def create_passthrough_target(self, sample: Dict[str, Any]) -> Dict[str, tf.Tensor]:
+        """Create passthrough output that maintains original format exactly."""
+        # Ensure input format is correct
+        formatted_sample = self._ensure_input_format(sample)
+        
+        # Return exactly the required format without any processing
+        return {
+            'file_name': formatted_sample['file_name'],
+            'head_bbox': formatted_sample['head_bbox'],
+            'image': formatted_sample['image'],
+            'label': formatted_sample['label'],
+            'segmentation_mask': formatted_sample['segmentation_mask'],
+            'species': formatted_sample['species']
+        }
+
     def _format_for_task(self, processed_sample: Dict[str, tf.Tensor], task: str):
         """Task formatting with better target structure."""
-        if task == "detection":
+        if task == "passthrough":
+            # For passthrough, we need to reconstruct the original format
+            return self.create_passthrough_target({
+                'file_name': processed_sample['file_name'],
+                'head_bbox': processed_sample['bbox'],  # Use normalized bbox
+                'image': processed_sample['image'],
+                'label': processed_sample['pet_class'],
+                'segmentation_mask': processed_sample['segmentation_mask'],
+                'species': processed_sample['species']
+            })
+        elif task == "detection":
             return self.create_detection_target(processed_sample)
         elif task == "segmentation":
             return self.create_segmentation_target(processed_sample)
@@ -302,20 +392,20 @@ class DataPreprocessor:
     def prepare_dataset(
         self,
         ds: tf.data.Dataset,
-        batch_size: int,
+        batch_size: int = None,
         shuffle: bool = False,
-        task: str = "detection",
+        task: str = "passthrough",
         cache_filename: Optional[str] = None,
         repeat: bool = False,
     ) -> tf.data.Dataset:
         """
-        Optimized dataset preparation with advanced caching and performance tuning.
+        Optimized dataset preparation with guaranteed output format.
         
         Args:
             ds: Input dataset with Oxford Pet structure
-            batch_size: Batch size for training/validation
+            batch_size: Batch size for training/validation (None for no batching)
             shuffle: Whether to shuffle the dataset
-            task: Task type - "detection", "segmentation", "classification", or "multitask"
+            task: Task type - "passthrough", "detection", "segmentation", "classification", or "multitask"
             cache_filename: Optional filename for caching
             repeat: Whether to repeat the dataset
         """
@@ -336,14 +426,6 @@ class DataPreprocessor:
         if repeat:
             ds = ds.repeat()
         
-        # Take a sample to understand the structure
-        # sample_elem = next(iter(ds.take(1)))
-        # print("Sample element type:", type(sample_elem))
-        # if isinstance(sample_elem, dict):
-        #     print("Sample keys:", list(sample_elem.keys()))
-        # else:
-        #     print("Sample structure:", sample_elem)
-        
         def _proc(sample):
             """Process a single sample from the dataset."""
             # Ensure sample is a dictionary with expected keys
@@ -355,8 +437,12 @@ class DataPreprocessor:
             if missing_keys:
                 raise KeyError(f"Missing required keys in sample: {missing_keys}")
             
-            processed = self.preprocess_sample(sample)
-            return self._format_for_task(processed, task)
+            if task == "passthrough":
+                # For passthrough, directly format the input without heavy processing
+                return self.create_passthrough_target(sample)
+            else:
+                processed = self.preprocess_sample(sample)
+                return self._format_for_task(processed, task)
         
         # Preprocessing with optimized parallelization
         ds = ds.map(
@@ -364,34 +450,33 @@ class DataPreprocessor:
             num_parallel_calls=tf.data.AUTOTUNE,
             deterministic=False,
         )
-
-        # print("Dataset element spec after preprocessing:")
-        # print(ds.element_spec)
         
-        # Only filter for valid_bbox if the task includes bbox information
-        # This must be done BEFORE caching and batching
+        # Only filter for valid_bbox if the task includes bbox information (and not passthrough)
         if task in ('detection', 'multitask'):
             ds = ds.filter(lambda img, targets: targets['valid_bbox'])
         
         # Post-processing cache (after filtering but before batching)
-        if cache_filename:  # Only cache in memory if not caching to file
+        if cache_filename:
             ds = ds.cache(cache_filename)
         else:
             ds = ds.cache()
         
+        # Batch only if batch_size is specified
+        if batch_size is not None:
+            ds = ds.batch(batch_size, drop_remainder=True)
+        
         # Prefetch for pipeline optimization
-        ds = ds.batch(batch_size, drop_remainder=True)
         ds = ds.prefetch(tf.data.AUTOTUNE)
         return ds
 
     def create_validation_dataset(
         self,
         ds: tf.data.Dataset,
-        batch_size: int,
-        task: str = "detection",
+        batch_size: int = None,
+        task: str = "passthrough",
     ) -> tf.data.Dataset:
         """Create optimized validation dataset without augmentation."""
-        return self.prepare_dataset(  # Fixed method name
+        return self.prepare_dataset(
             ds=ds,
             batch_size=batch_size,
             shuffle=False,  # No shuffling for validation
@@ -432,44 +517,78 @@ class DataPreprocessor:
         }
         
         sample_count = 0
-        for images, targets in ds.take(num_samples // 32):  # Assuming batch_size=32              
-            # Image statistics
-            batch_mean = tf.reduce_mean(images, axis=[0, 1, 2])
-            batch_std = tf.math.reduce_std(images, axis=[0, 1, 2])
+        for batch in ds.take(num_samples // 32):  # Assuming batch_size=32              
+            if isinstance(batch, dict):
+                # For passthrough format
+                images = batch['image']
+                pet_classes = batch['label']
+                species = batch['species']
+                bboxes = batch['head_bbox']
+                masks = batch['segmentation_mask']
+            else:
+                # For other formats (images, targets)
+                images, targets = batch
+                pet_classes = targets.get('pet_class', targets.get('label'))
+                species = targets.get('species')
+                bboxes = targets.get('bbox', targets.get('head_bbox'))
+                masks = targets.get('mask', targets.get('segmentation_mask'))
+            
+            # Handle both batched and unbatched data
+            if len(images.shape) == 3:  # Single image
+                images = tf.expand_dims(images, 0)
+                if pet_classes is not None:
+                    pet_classes = tf.expand_dims(pet_classes, 0)
+                if species is not None:
+                    species = tf.expand_dims(species, 0)
+                if bboxes is not None:
+                    bboxes = tf.expand_dims(bboxes, 0)
+                if masks is not None:
+                    masks = tf.expand_dims(masks, 0)
+            
+            # Image statistics (convert to float for statistics)
+            images_float = tf.cast(images, tf.float32) / 255.0
+            batch_mean = tf.reduce_mean(images_float, axis=[0, 1, 2])
+            batch_std = tf.math.reduce_std(images_float, axis=[0, 1, 2])
             stats['mean_pixel_values'].append(batch_mean.numpy())
             stats['std_pixel_values'].append(batch_std.numpy())
                 
             # Bbox statistics if available
-            if 'bbox' in targets:
-                areas = self._compute_bbox_area(targets['bbox'])
+            if bboxes is not None:
+                areas = self._compute_bbox_area(bboxes)
                 stats['bbox_areas'].extend(areas.numpy().tolist())
                 
             # Pet class distribution
-            if 'pet_class' in targets:
-                for lbl in targets['pet_class'].numpy():
+            if pet_classes is not None:
+                for lbl in pet_classes.numpy():
                     stats['pet_class_distribution'][int(lbl)] = \
                         stats['pet_class_distribution'].get(int(lbl), 0) + 1
                     
             # Species distribution
-            if 'species' in targets:
-                for s in targets['species'].numpy():
+            if species is not None:
+                for s in species.numpy():
                     stats['species_distribution'][int(s)] = \
                         stats['species_distribution'].get(int(s), 0) + 1
                 
             # Segmentation mask statistics
-            if 'mask' in targets:
-                for mask in targets['mask'].numpy():
-                    stats['segmentation_class_distribution']['background'] += np.sum(mask == 0)
-                    stats['segmentation_class_distribution']['foreground'] += np.sum(mask == 1)
-                    stats['segmentation_class_distribution']['boundary'] += np.sum(mask == 2)
+            if masks is not None:
+                for mask in masks.numpy():
+                    unique_vals, counts = np.unique(mask, return_counts=True)
+                    for val, count in zip(unique_vals, counts):
+                        if val == 0:
+                            stats['segmentation_class_distribution']['background'] += count
+                        elif val == 1:
+                            stats['segmentation_class_distribution']['foreground'] += count
+                        elif val == 2:
+                            stats['segmentation_class_distribution']['boundary'] += count
                         
             sample_count += images.shape[0]
             if sample_count >= num_samples:
                 break
         
         # Aggregate statistics
-        stats['mean_pixel_values'] = np.mean(stats['mean_pixel_values'], axis=0)
-        stats['std_pixel_values'] = np.mean(stats['std_pixel_values'], axis=0)
+        if stats['mean_pixel_values']:
+            stats['mean_pixel_values'] = np.mean(stats['mean_pixel_values'], axis=0)
+            stats['std_pixel_values'] = np.mean(stats['std_pixel_values'], axis=0)
         
         return stats
 
@@ -494,3 +613,55 @@ class DataPreprocessor:
             'species': species_names,
             'segmentation_classes': ['Background', 'Foreground', 'Boundary']
         }
+
+    def verify_output_format(self, ds: tf.data.Dataset) -> bool:
+        """Verify that the dataset output matches the expected TensorSpec format."""
+        expected_spec = {
+            'file_name': tf.TensorSpec(shape=(), dtype=tf.string),
+            'head_bbox': tf.TensorSpec(shape=(4,), dtype=tf.float32),
+            'image': tf.TensorSpec(shape=(None, None, 3), dtype=tf.uint8),
+            'label': tf.TensorSpec(shape=(), dtype=tf.int64),
+            'segmentation_mask': tf.TensorSpec(shape=(None, None, 1), dtype=tf.uint8),
+            'species': tf.TensorSpec(shape=(), dtype=tf.int64)
+        }
+        
+        try:
+            sample = next(iter(ds))
+            
+            for key, expected_tensor_spec in expected_spec.items():
+                if key not in sample:
+                    print(f"Missing key: {key}")
+                    return False
+                
+                actual_tensor = sample[key]
+                
+                # Check dtype
+                if actual_tensor.dtype != expected_tensor_spec.dtype:
+                    print(f"Dtype mismatch for {key}: expected {expected_tensor_spec.dtype}, got {actual_tensor.dtype}")
+                    return False
+                
+                # Check shape compatibility
+                expected_shape = expected_tensor_spec.shape
+                actual_shape = actual_tensor.shape
+                
+                if len(expected_shape) != len(actual_shape):
+                    print(f"Shape rank mismatch for {key}: expected {len(expected_shape)}, got {len(actual_shape)}")
+                    return False
+                
+                for i, (exp_dim, act_dim) in enumerate(zip(expected_shape, actual_shape)):
+                    if exp_dim is not None and exp_dim != act_dim:
+                        print(f"Shape dimension mismatch for {key} at index {i}: expected {exp_dim}, got {act_dim}")
+                        return False
+            
+            print("✅ Output format verification passed!")
+            print("Actual output spec:")
+            for key, tensor in sample.items():
+                print(f"  '{key}': TensorSpec(shape={tuple(tensor.shape)}, dtype={tensor.dtype})")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error during verification: {e}")
+            return False
+
+    

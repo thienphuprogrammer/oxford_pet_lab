@@ -128,11 +128,11 @@ def _prepare_datasets(
     )
 
     # Monitor dataset quality
-    stats_train = prep.get_dataset_statistics(train_ds)
-    stats_val = prep.get_dataset_statistics(val_ds)
-    stats_test = prep.get_dataset_statistics(test_ds)
+    # stats_train = prep.get_dataset_statistics(train_ds)
+    # stats_val = prep.get_dataset_statistics(val_ds)
+    # stats_test = prep.get_dataset_statistics(test_ds)
 
-    # # Save stats
+    # Save stats
     # with open(cfg.REPORT_DIR / "train_stats.json", "w") as f:
     #     json.dump(stats_train, f)
     # with open(cfg.REPORT_DIR / "val_stats.json", "w") as f:

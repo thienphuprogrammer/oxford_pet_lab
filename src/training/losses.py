@@ -268,6 +268,33 @@ class VarifocalLoss(tf.keras.losses.Loss):
     def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         y_true = tf.cast(y_true, tf.float32)
         y_pred = tf.cast(y_pred, tf.float32)
+
+        # If y_true is integer labels (rank 1 or rank 2 with trailing dim==1) convert to one-hot
+        static_rank = y_true.shape.rank  # may be None in graph mode
+        if static_rank is not None:
+            if static_rank == 1 or (static_rank == 2 and y_true.shape[-1] == 1):
+                num_classes = tf.shape(y_pred)[-1]
+                y_true = tf.cast(
+                    tf.one_hot(tf.cast(tf.squeeze(y_true), tf.int32), num_classes),
+                    tf.float32,
+                )
+        else:
+            # Dynamic check for rank when static rank is unknown (graph mode)
+            rank = tf.rank(y_true)
+            is_rank1 = tf.equal(rank, 1)
+            is_rank2_last1 = tf.logical_and(
+                tf.equal(rank, 2), tf.equal(tf.shape(y_true)[-1], 1)
+            )
+            need_one_hot = tf.logical_or(is_rank1, is_rank2_last1)
+
+            def _to_one_hot():
+                num_classes_dyn = tf.shape(y_pred)[-1]
+                return tf.cast(
+                    tf.one_hot(tf.cast(tf.squeeze(y_true), tf.int32), num_classes_dyn),
+                    tf.float32,
+                )
+
+            y_true = tf.cond(need_one_hot, _to_one_hot, lambda: y_true)
         
         if self.from_logits:
             y_pred = tf.nn.sigmoid(y_pred)
@@ -284,7 +311,7 @@ class VarifocalLoss(tf.keras.losses.Loss):
         ce_loss = -(y_true * tf.math.log(y_pred) + (1 - y_true) * tf.math.log(1 - y_pred))
         vf_loss = focal_weight * y_true * ce_loss
         
-        return tf.reduce_mean(vf_loss)
+        return tf.reduce_mean(tf.reduce_sum(vf_loss, axis=-1))
     
     def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
@@ -503,60 +530,80 @@ class UnifiedDetectionLoss(tf.keras.losses.Loss):
         else:
             return self._call_tensor_inputs(y_true, y_pred)
     
-    def _call_dict_inputs(self, y_true: Dict[str, tf.Tensor], 
-                         y_pred: Dict[str, tf.Tensor]) -> tf.Tensor:
-        # Cast all inputs to float32
-        for key in y_true:
-            y_true[key] = tf.cast(y_true[key], tf.float32)
-        for key in y_pred:
-            y_pred[key] = tf.cast(y_pred[key], tf.float32)
-        
-        total_loss = 0.0
-        
-        # Handle bounding box loss - support multiple key naming conventions
-        bbox_keys = ['head_bbox', 'bbox', 'bbox_output', 'bounding_box']
-        bbox_true = None
-        bbox_pred = None
-        
-        for key in bbox_keys:
-            if key in y_true and key in y_pred:
-                bbox_true = y_true[key]
-                bbox_pred = y_pred[key]
-                break
-        
+    def _call_dict_inputs(self, y_true: Dict[str, tf.Tensor], y_pred: Dict[str, tf.Tensor]) -> tf.Tensor:
+        """
+        Compute unified detection loss when both ``y_true`` and ``y_pred`` are
+        dictionaries. The method is tolerant to different key naming conventions
+        so that the correct tensors are always matched.
+        """
+        # Cast all tensors to float32 to avoid dtype mismatches
+        y_true = {k: tf.cast(v, tf.float32) for k, v in y_true.items()}
+        y_pred = {k: tf.cast(v, tf.float32) for k, v in y_pred.items()}
+
+        # Initialise as a tensor so that zero loss still participates in the graph
+        total_loss = tf.constant(0.0, dtype=tf.float32)
+
+        # ------------------------------------------------------------------ #
+        # Bounding-box loss                                                  #
+        # ------------------------------------------------------------------ #
+        bbox_true_keys = ['head_bbox', 'bbox', 'bounding_box']
+        bbox_pred_keys = ['bbox_output', 'bbox', 'head_bbox', 'bounding_box']
+
+        bbox_true = next((y_true[k] for k in bbox_true_keys if k in y_true), None)
+        bbox_pred = next((y_pred[k] for k in bbox_pred_keys if k in y_pred), None)
+
         if bbox_true is not None and bbox_pred is not None:
             bbox_loss = self.bbox_loss(bbox_true, bbox_pred)
             total_loss += self.bbox_loss_weight * bbox_loss
-        
-        # Handle classification loss - support multiple key naming conventions
-        cls_keys = ['label', 'class', 'cls', 'class_output', 'species']
-        cls_true = None
-        cls_pred = None
-        
-        for key in cls_keys:
-            if key in y_true and key in y_pred:
-                cls_true = y_true[key]
-                cls_pred = y_pred[key]
-                break
-        
+
+        # ------------------------------------------------------------------ #
+        # Classification loss                                                #
+        # ------------------------------------------------------------------ #
+        cls_true_keys = ['label', 'class', 'cls', 'species']
+        cls_pred_keys = ['class_output', 'class', 'cls', 'species']
+
+        cls_true = next((y_true[k] for k in cls_true_keys if k in y_true), None)
+        cls_pred = next((y_pred[k] for k in cls_pred_keys if k in y_pred), None)
+
         if cls_true is not None and cls_pred is not None:
-            # Convert integer labels to one-hot if needed
-            if len(cls_true.shape) == 1 or (len(cls_true.shape) == 2 and cls_true.shape[-1] == 1):
-                num_classes = tf.reduce_max(cls_true) + 1
-                cls_true = tf.one_hot(tf.cast(cls_true, tf.int32), depth=num_classes)
-                cls_true = tf.squeeze(cls_true)
-            
+            # One-hot encode integer labels if necessary
+            if cls_true.shape.rank is not None:
+                need_one_hot = cls_true.shape.rank == 1 or (
+                    cls_true.shape.rank == 2 and cls_true.shape[-1] == 1
+                )
+            else:
+                rank_dyn = tf.rank(cls_true)
+                need_one_hot = tf.logical_or(
+                    tf.equal(rank_dyn, 1),
+                    tf.logical_and(tf.equal(rank_dyn, 2), tf.equal(tf.shape(cls_true)[-1], 1)),
+                )
+
+            def _to_one_hot_dyn(labels):
+                depth = tf.shape(cls_pred)[-1]  # Always align with prediction classes
+                return tf.one_hot(tf.cast(tf.squeeze(labels), tf.int32), depth=depth)
+
+            if cls_true.shape.rank is not None:
+                if need_one_hot:
+                    cls_true = _to_one_hot_dyn(cls_true)
+            else:
+                cls_true = tf.cond(need_one_hot, lambda: _to_one_hot_dyn(cls_true), lambda: cls_true)
+
+            # Ensure dtype float32
+            cls_true = tf.cast(cls_true, tf.float32)
+
             cls_loss = self.cls_loss(cls_true, cls_pred)
             total_loss += self.cls_loss_weight * cls_loss
-        
-        # Add quality loss if available and enabled
-        if (self.use_quality_focal and 
-            'quality' in y_true and 'quality' in y_pred and 
-            hasattr(self, 'quality_loss')):
-            quality_loss = self.quality_loss(y_true['quality'], y_pred['quality'])
-            total_loss += self.quality_loss_weight * quality_loss
-        
+
+        # ------------------------------------------------------------------ #
+        # Optional quality focal loss                                        #
+        # ------------------------------------------------------------------ #
+        if self.use_quality_focal and hasattr(self, 'quality_loss'):
+            if 'quality' in y_true and 'quality' in y_pred:
+                quality_loss = self.quality_loss(y_true['quality'], y_pred['quality'])
+                total_loss += self.quality_loss_weight * quality_loss
+
         return total_loss
+
     
     def _call_tensor_inputs(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         """Handle tensor inputs by assuming they are bbox coordinates"""

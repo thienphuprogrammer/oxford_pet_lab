@@ -24,6 +24,9 @@ class SimpleDetectionModel(BaseDetectionModel):
         self._init_params()
 
         self.backbone = self._build_backbone()
+        # Initialize FPN if needed
+        if self.use_fpn:
+            self.fpn = FPN(feature_dim=256)
         self.head = self._build_detection_head()
         self.classification_head = self._build_classification_head()
         
@@ -45,6 +48,9 @@ class SimpleDetectionModel(BaseDetectionModel):
         self.use_auxiliary_head = params_model.get('use_auxiliary_head', True)
         self.use_classification_head = params_model.get('use_classification_head', True)
         self.use_detection_head = params_model.get('use_detection_head', True)
+        
+        # Add input shape configuration
+        self.input_shape = params_model.get('input_shape', (224, 224, 3))
         
 
     def _build_backbone(self):  
@@ -78,11 +84,18 @@ class SimpleDetectionModel(BaseDetectionModel):
                 return x
             return block
         
-        # Input layer
-        inputs = layers.Input(shape=(224, 224, 3))
+        # Use configurable input shape
+        inputs = layers.Input(shape=self.input_shape)
+        
+        # Handle different input channels
+        if self.input_shape[-1] == 1:
+            # Convert grayscale to RGB if needed
+            x = layers.Conv2D(3, 1, padding='same')(inputs)
+        else:
+            x = inputs
         
         # Stem
-        x = layers.Conv2D(64, 7, strides=2, padding='same')(inputs)
+        x = layers.Conv2D(64, 7, strides=2, padding='same')(x)
         x = layers.BatchNormalization()(x)
         x = layers.ReLU()(x)
         x = layers.MaxPooling2D(3, strides=2, padding='same')(x)
@@ -132,7 +145,10 @@ class SimpleDetectionModel(BaseDetectionModel):
                     bbox_outputs.append(bbox_out)
                 
                 # Combine multi-scale outputs
-                combined_bbox = layers.Average()(bbox_outputs)
+                if len(bbox_outputs) > 1:
+                    combined_bbox = layers.Average()(bbox_outputs)
+                else:
+                    combined_bbox = bbox_outputs[0]
                 return combined_bbox
             return detection_head
         else:
@@ -164,7 +180,10 @@ class SimpleDetectionModel(BaseDetectionModel):
                     class_outputs.append(class_out)
                 
                 # Combine multi-scale outputs
-                combined_class = layers.Average()(class_outputs)
+                if len(class_outputs) > 1:
+                    combined_class = layers.Average()(class_outputs)
+                else:
+                    combined_class = class_outputs[0]
                 combined_class = layers.Activation('softmax', name='class_output')(combined_class)
                 return combined_class
             return classification_head
@@ -184,10 +203,10 @@ class SimpleDetectionModel(BaseDetectionModel):
         
         if self.use_fpn:
             fpn_features = self.fpn(features)
-            bbox_output = self.detection_head(fpn_features)
+            bbox_output = self.head(fpn_features)
             class_output = self.classification_head(fpn_features)
         else:
-            bbox_output = self.detection_head(features, training=training)
+            bbox_output = self.head(features, training=training)
             class_output = self.classification_head(features, training=training)
         
         return {
@@ -227,12 +246,20 @@ class PretrainedDetectionModel(BaseDetectionModel):
 
     def _build_backbone(self):
         """Build the backbone of the model."""
+        # Handle grayscale input by adjusting input shape for pretrained models
+        if self.input_shape[-1] == 1 and self.pretrained_weights == 'imagenet':
+            # ImageNet pretrained models expect 3 channels
+            effective_input_shape = (224, 224, 3)
+            needs_channel_conversion = True
+        else:
+            effective_input_shape = self.input_shape
+            needs_channel_conversion = False
     
         if self.backbone_name.lower() == 'resnet50':
             backbone = ResNet50(
                 include_top=False,
                 weights=self.pretrained_weights,
-                input_shape=self.input_shape,
+                input_shape=effective_input_shape,
             )
             layer_names = [
                 'conv1_relu', 
@@ -245,7 +272,7 @@ class PretrainedDetectionModel(BaseDetectionModel):
             backbone = MobileNetV2(
                 include_top=False,
                 weights=self.pretrained_weights,
-                input_shape=self.input_shape,
+                input_shape=effective_input_shape,
             )
             layer_names = [
                 'block_1_expand_relu',
@@ -258,7 +285,7 @@ class PretrainedDetectionModel(BaseDetectionModel):
             backbone = EfficientNetV2B0(
                 include_top=False,
                 weights=self.pretrained_weights,
-                input_shape=self.input_shape,
+                input_shape=effective_input_shape,
             )
             layer_names = [
                 'block3a_expand_activation',
@@ -270,7 +297,7 @@ class PretrainedDetectionModel(BaseDetectionModel):
             backbone = EfficientNetV2B1(
                 include_top=False,
                 weights=self.pretrained_weights,
-                input_shape=self.input_shape,
+                input_shape=effective_input_shape,
             )
             layer_names = [
                 'block2b_add',
@@ -282,7 +309,7 @@ class PretrainedDetectionModel(BaseDetectionModel):
             backbone = EfficientNetV2B2(
                 include_top=False,
                 weights=self.pretrained_weights,
-                input_shape=self.input_shape,
+                input_shape=effective_input_shape,
             )   
             layer_names = [
                 'block3a_add',
@@ -294,18 +321,40 @@ class PretrainedDetectionModel(BaseDetectionModel):
         else:
             raise ValueError(f"Unsupported backbone: {self.backbone_name}")
         
+        # Get available layer names
+        available_layers = [layer.name for layer in backbone.layers]
+        valid_layers = [name for name in layer_names if name in available_layers]
         
-        outputs = [backbone.get_layer(name).output for name in layer_names if name in [layer.name for layer in backbone.layers]]
-        
-        # If some layers don't exist, use alternative approach
-        if len(outputs) < 3:
+        if len(valid_layers) < 3:
+            # Fallback: get feature maps from different stages
             outputs = []
             for i, layer in enumerate(backbone.layers):
-                if 'block' in layer.name and 'activation' in layer.name:
+                if ('block' in layer.name and 'activation' in layer.name) or ('conv' in layer.name and 'relu' in layer.name):
                     outputs.append(layer.output)
-            outputs = outputs[-4:]  # Take last 4 feature maps
+            outputs = outputs[-4:] if len(outputs) >= 4 else outputs  # Take last 4 or all available
+        else:
+            outputs = [backbone.get_layer(name).output for name in valid_layers]
         
-        feature_extractor = keras.Model(backbone.input, outputs)
+        # Handle channel conversion if needed
+        if needs_channel_conversion:
+            # Create a new input layer for grayscale and convert to RGB
+            grayscale_input = layers.Input(shape=self.input_shape)
+            if self.input_shape[-1] == 1:
+                rgb_input = layers.Conv2D(3, 1, padding='same', name='grayscale_to_rgb')(grayscale_input)
+            else:
+                rgb_input = grayscale_input
+            
+            # Pass through backbone
+            backbone_outputs = backbone(rgb_input)
+            if isinstance(backbone_outputs, list):
+                final_outputs = backbone_outputs
+            else:
+                final_outputs = [backbone_outputs]
+            
+            feature_extractor = keras.Model(grayscale_input, outputs)
+        else:
+            feature_extractor = keras.Model(backbone.input, outputs)
+        
         return feature_extractor
     
     def _build_bifpn(self):
@@ -313,44 +362,62 @@ class PretrainedDetectionModel(BaseDetectionModel):
         return BiFPN(feature_dim=64)
     
     def _build_detection_head(self):
-        """Build detection head for multi-scale features"""
+        """Build detection head for multi-scale features without creating new variables each call."""
+        # Instantiate layers once and reuse.
+        det_convs = [
+            layers.Conv2D(64, 3, padding='same', activation='swish', name=f'det_conv_{i}')
+            for i in range(3)
+        ]
+        det_bbox_conv = layers.Conv2D(4, 3, padding='same', name='det_bbox_conv')
+        det_gap = layers.GlobalAveragePooling2D(name='det_gap')
+        det_avg = layers.Average(name='det_avg')
+
         def detection_head(features):
             bbox_outputs = []
             for feature in features:
                 x = feature
-                # Detection subnet
-                for _ in range(3):
-                    x = layers.Conv2D(64, 3, padding='same', activation='swish')(x)
-                
-                bbox_out = layers.Conv2D(4, 3, padding='same')(x)
-                bbox_out = layers.GlobalAveragePooling2D()(bbox_out)
+                # Detection subnet (shared weights across scales)
+                for conv in det_convs:
+                    x = conv(x)
+                bbox_out = det_bbox_conv(x)
+                bbox_out = det_gap(bbox_out)
                 bbox_outputs.append(bbox_out)
-            
-            # Weighted combination
-            combined = layers.Average()(bbox_outputs)
+            # Weighted combination across scales
+            if len(bbox_outputs) > 1:
+                combined = det_avg(bbox_outputs)
+            else:
+                combined = bbox_outputs[0]
             return combined
-        
+
         return detection_head
     
     def _build_classification_head(self):
-        """Build classification head for multi-scale features"""
+        """Build classification head for multi-scale features without recreating variables on each call."""
+        cls_convs = [
+            layers.Conv2D(64, 3, padding='same', activation='swish', name=f'cls_conv_{i}')
+            for i in range(3)
+        ]
+        cls_head_conv = layers.Conv2D(self.num_classes, 3, padding='same', name='cls_head_conv')
+        cls_gap = layers.GlobalAveragePooling2D(name='cls_gap')
+        cls_avg = layers.Average(name='cls_avg')
+        cls_softmax = layers.Activation('softmax', name='class_output')
+
         def classification_head(features):
             class_outputs = []
             for feature in features:
                 x = feature
-                # Classification subnet
-                for _ in range(3):
-                    x = layers.Conv2D(64, 3, padding='same', activation='swish')(x)
-                
-                class_out = layers.Conv2D(self.num_classes, 3, padding='same')(x)
-                class_out = layers.GlobalAveragePooling2D()(class_out)
+                for conv in cls_convs:
+                    x = conv(x)
+                class_out = cls_head_conv(x)
+                class_out = cls_gap(class_out)
                 class_outputs.append(class_out)
-            
-            # Weighted combination
-            combined = layers.Average()(class_outputs)
-            combined = layers.Activation('softmax', name='class_output')(combined)
+            if len(class_outputs) > 1:
+                combined = cls_avg(class_outputs)
+            else:
+                combined = class_outputs[0]
+            combined = cls_softmax(combined)
             return combined
-        
+
         return classification_head
     
     def call(self, inputs, training=None):
@@ -380,11 +447,10 @@ class YOLOv5InspiredModel(BaseDetectionModel):
         self.backbone_name = self.config.BACKBONE
         self._init_params()
         
-        # Darknet-like backbone
-        self.backbone = self._build_darknet_backbone()
-        
-        # YOLO detection head
-        self.detection_layers = self._build_detection_layers()
+        # Build components
+        self.backbone = self._build_csp_backbone()  # Fixed method name
+        self.neck = self._build_pafpn_neck()
+        self.head = self._build_yolo_head()
 
     def _init_params(self):
         """Initialize parameters"""
@@ -428,10 +494,16 @@ class YOLOv5InspiredModel(BaseDetectionModel):
                 return x
             return block
         
-        inputs = layers.Input(shape=(224, 224, 3))
+        inputs = layers.Input(shape=self.input_shape)
+        
+        # Handle different input channels
+        if self.input_shape[-1] == 1:
+            x = layers.Conv2D(3, 1, padding='same')(inputs)
+        else:
+            x = inputs
         
         # Focus layer (simulate space-to-depth)
-        x = layers.Conv2D(64, 6, strides=2, padding='same')(inputs)
+        x = layers.Conv2D(64, 6, strides=2, padding='same')(x)
         x = layers.BatchNormalization()(x)
         x = layers.Activation('swish')(x)
         
@@ -555,8 +627,13 @@ class YOLOv5InspiredModel(BaseDetectionModel):
             class_outputs.append(class_out)
         
         # Combine multi-scale outputs
-        bbox_output = tf.reduce_mean(tf.stack(bbox_outputs), axis=0)
-        class_output = tf.reduce_mean(tf.stack(class_outputs), axis=0)
+        if len(bbox_outputs) > 1:
+            bbox_output = tf.reduce_mean(tf.stack(bbox_outputs), axis=0)
+            class_output = tf.reduce_mean(tf.stack(class_outputs), axis=0)
+        else:
+            bbox_output = bbox_outputs[0]
+            class_output = class_outputs[0]
+        
         class_output = tf.nn.softmax(class_output)
         
         return {
