@@ -6,6 +6,20 @@ from tensorflow.keras.metrics import (
 )
 import tensorflow as tf
 
+# === Float32-safe metric wrappers ===
+class Float32CategoricalAccuracy(CategoricalAccuracy):
+    """CategoricalAccuracy that safely casts predictions to float32 for mixed-precision models."""
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_pred = tf.cast(y_pred, tf.float32)
+        return super().update_state(y_true, y_pred, sample_weight)
+
+class Float32TopKCategoricalAccuracy(TopKCategoricalAccuracy):
+    """TopKCategoricalAccuracy that safely casts predictions to float32 for mixed-precision models."""
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_pred = tf.cast(y_pred, tf.float32)
+        return super().update_state(y_true, y_pred, sample_weight)
+
+
 class SOTAMetrics:
     # ========= SEGMENTATION METRICS =========
     @staticmethod
@@ -68,20 +82,57 @@ class SOTAMetrics:
 
     # ========= OBJECT DETECTION METRICS =========
     @staticmethod
-    def get_detection_metrics():
-        return [
-            MeanIoU(num_classes=2, name='detection_iou'),
-            MeanAbsoluteError(name='box_mae'),
-            MeanSquaredError(name='box_mse'),
-            RootMeanSquaredError(name='box_rmse'),
-            BinaryAccuracy(name='obj_accuracy'),
-            Precision(name='obj_precision'),
-            Recall(name='obj_recall'),
-            AUC(name='obj_auc'),
-            CategoricalAccuracy(name='cls_accuracy'),
-            TopKCategoricalAccuracy(k=5, name='cls_top5'),
-            SOTAMetrics._map_approximation(),
-        ]
+    def get_detection_metrics_structured(model, num_classes: int):
+        """
+        Returns detection metrics properly structured for multi-output model
+        """
+        # Option 1: If you know your output names
+        if hasattr(model, 'output_names') and len(model.output_names) == 2:
+            output1_name = model.output_names[0]  # e.g., 'classification'
+            output2_name = model.output_names[1]  # e.g., 'detection'
+            
+            return {
+                output1_name: [
+                    Float32CategoricalAccuracy(name='cls_accuracy'),
+                    Float32TopKCategoricalAccuracy(k=3, name='cls_top3'),
+                ],
+                output2_name: [
+                    MeanIoU(num_classes=num_classes, name='detection_iou'),
+                    MeanAbsoluteError(name='box_mae'),
+                    MeanSquaredError(name='box_mse'),
+                    RootMeanSquaredError(name='box_rmse'),
+                    BinaryAccuracy(name='obj_accuracy'),
+                    Precision(name='obj_precision'),
+                    Recall(name='obj_recall'),
+                    AUC(name='obj_auc'),
+                    # Add your mAP approximation here
+                    SOTAMetrics._map_approximation()
+                ]
+            }
+        
+        # Option 2: Use indexed outputs (most common case)
+        else:
+            return [
+                # Metrics for output 0 (classification)
+                [
+                    Float32CategoricalAccuracy(name='cls_accuracy'),
+                    Float32TopKCategoricalAccuracy(k=3, name='cls_top3'),
+                ],
+                
+                # Metrics for output 1 (detection/boxes)
+                [
+                    MeanIoU(num_classes=num_classes, name='detection_iou'),
+                    MeanAbsoluteError(name='box_mae'),
+                    MeanSquaredError(name='box_mse'),
+                    RootMeanSquaredError(name='box_rmse'),
+                    BinaryAccuracy(name='obj_accuracy'),
+                    Precision(name='obj_precision'),
+                    Recall(name='obj_recall'),
+                    AUC(name='obj_auc'),
+                    # Add your mAP approximation here
+                    SOTAMetrics._map_approximation(),
+                ]
+            ]
 
     @staticmethod
     def _map_approximation():
@@ -106,7 +157,7 @@ class SOTAMetrics:
 
     # ========= CLASSIFICATION METRICS =========
     @staticmethod
-    def get_classification_metrics(num_classes):
+    def get_classification_metrics(num_classes: int):
         if num_classes == 2:
             return [
                 BinaryAccuracy(name='accuracy'),
@@ -118,8 +169,8 @@ class SOTAMetrics:
             ]
         else:
             return [
-                CategoricalAccuracy(name='accuracy'),
-                TopKCategoricalAccuracy(k=5, name='top5'),
+                Float32CategoricalAccuracy(name='accuracy'),
+                Float32TopKCategoricalAccuracy(k=5, name='top5'),
                 SOTAMetrics._f1_score(num_classes=num_classes, average='macro', name='f1_macro'),
                 SOTAMetrics._f1_score(num_classes=num_classes, average='micro', name='f1_micro'),
                 CategoricalCrossentropy(name='cce'),
@@ -127,22 +178,22 @@ class SOTAMetrics:
 
     # ========= MULTITASK METRICS =========
     @staticmethod
-    def get_multitask_metrics():
+    def get_multitask_metrics(num_detection_classes: int, num_segmentation_classes: int):
         return {
             'detection': [
-                MeanIoU(num_classes=2, name='det_iou'),
+                MeanIoU(num_classes=num_detection_classes, name='det_iou'),
                 MeanAbsoluteError(name='det_mae'),
                 BinaryAccuracy(name='det_acc'),
             ],
             'segmentation': [
-                MeanIoU(num_classes=2, name='seg_iou'),
-                SOTAMetrics._f1_score(num_classes=2, name='seg_f1'),
+                MeanIoU(num_classes=num_segmentation_classes, name='seg_iou'),
+                SOTAMetrics._f1_score(num_classes=num_segmentation_classes, name='seg_f1'),
                 BinaryAccuracy(name='seg_acc'),
                 SOTAMetrics._dice_coefficient(),
             ],
             'classification': [
-                CategoricalAccuracy(name='cls_acc'),
-                TopKCategoricalAccuracy(k=5, name='cls_top5'),
-                SOTAMetrics._f1_score(num_classes=10, average='macro', name='cls_f1'),
+                Float32CategoricalAccuracy(name='cls_acc'),
+                Float32TopKCategoricalAccuracy(k=5, name='cls_top5'),
+                SOTAMetrics._f1_score(num_classes=num_detection_classes, average='macro', name='cls_f1'),
             ]
         }

@@ -43,7 +43,7 @@ class UniversalTrainer:
         """Get loss function tối ưu cho từng task"""
         if loss_type == 'auto':
             loss_configs = {
-                'detection': get_detection_loss(num_classes=self.num_classes),
+                'detection': get_detection_loss(),
                 'segmentation': get_segmentation_loss(),
                 'multitask': get_multitask_loss()
             }
@@ -55,9 +55,9 @@ class UniversalTrainer:
     def get_metrics(self, metrics_type: str = 'auto'):
         """Get metrics tối ưu cho từng task"""
         metrics_configs = {
-            'detection': SOTAMetrics.get_detection_metrics(),
-            'segmentation': SOTAMetrics.get_segmentation_metrics(),
-            'multitask': SOTAMetrics.get_multitask_metrics(),
+            'detection': SOTAMetrics.get_detection_metrics_structured(self.model, num_classes=self.num_classes),
+            'segmentation': SOTAMetrics.get_segmentation_metrics(num_classes=self.num_classes),
+            'multitask': SOTAMetrics.get_multitask_metrics(num_detection_classes=self.num_classes, num_segmentation_classes=self.num_classes),
         }
         return metrics_configs[self.task_type]
         
@@ -99,7 +99,7 @@ class UniversalTrainer:
         self.model.compile(
             optimizer=self.get_optimizer(optimizer, learning_rate),
             loss=self.get_loss(loss),
-            metrics=self.get_metrics(metrics)
+            # metrics=self.get_metrics(metrics)
         )
         
         # Get callbacks
@@ -110,7 +110,7 @@ class UniversalTrainer:
             train_data,
             validation_data=val_data,
             epochs=epochs,
-            callbacks=callback_list,
+            # callbacks=callback_list,
             verbose=1,
             **kwargs
         )
