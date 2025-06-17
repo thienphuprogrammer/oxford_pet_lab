@@ -12,7 +12,7 @@ from src.config.model_configs import ModelConfigs
 from src.data import OxfordPetDatasetLoader, DataPreprocessor, DataAugmentor
 from src.evaluation.evaluator import Evaluator
 from src.models.base_model import ModelBuilder
-from src.training.trainer import Trainer
+from src.training.trainer import *
 
 def _build_model(task: str, cfg: Config, backbone: str) -> tf.keras.Model:
     task = task.lower()
@@ -144,11 +144,9 @@ def main(argv: list[str] | None = None) -> None:
     train_ds, val_ds, test_ds = _prepare_datasets(args.task, args.batch_size, cfg)
 
     model = _build_model(args.task, cfg, args.backbone)
-    trainer = Trainer(
+    trainer = UniversalTrainer(
         model=model,
-        task_type=args.task,
-        config=cfg,
-        model_cfg=models_cfg,
+        task_type=args.task
     )
 
     print(f"\n[INFO] Starting training – task={args.task} backbone={args.backbone} epochs={args.epochs}")
