@@ -89,11 +89,17 @@ class DataPreprocessor:
         }
 
     def for_detection(self, sample: Dict[str, Any]) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:
+        """Format data for detection task"""
         data = self.preprocess_sample(sample)
         image = data['image']
+        
+        # Ensure consistent shapes for detection targets
+        bbox = tf.reshape(data['head_bbox'], [4])  # [x1, y1, x2, y2]
+        label = tf.reshape(data['label'], [1])  # [class_id]
+        
         target = {
-            'bbox': data['head_bbox'],
-            'label': data['label'],
+            'bbox_output': bbox,
+            'class_output': label
         }
         return image, target
 

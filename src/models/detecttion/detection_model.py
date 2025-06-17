@@ -199,19 +199,27 @@ class SimpleDetectionModel(BaseDetectionModel):
             return classification_head
         
     def call(self, inputs, training=None):
-        features = self.backbone(inputs, training=training)
-        
+        """Forward pass for detection model"""
+        # Get backbone features
         if self.use_fpn:
-            fpn_features = self.fpn(features)
-            bbox_output = self.head(fpn_features)
-            class_output = self.classification_head(fpn_features)
+            features = self.backbone(inputs)
+            # Apply FPN if needed
+            if hasattr(self, 'fpn'):
+                features = self.fpn(features)
         else:
-            bbox_output = self.head(features, training=training)
-            class_output = self.classification_head(features, training=training)
+            features = self.backbone(inputs)
+        
+        # Get detection outputs
+        bbox_output = self.head(features)
+        class_output = self.classification_head(features)
+        
+        # Ensure consistent shapes
+        bbox_output = tf.reshape(bbox_output, [-1, 4])  # [batch_size, 4]
+        class_output = tf.reshape(class_output, [-1, self.num_classes])  # [batch_size, num_classes]
         
         return {
-            'bbox': bbox_output,
-            'label': class_output,
+            'bbox_output': bbox_output,
+            'class_output': class_output
         }
 
 
