@@ -172,6 +172,11 @@ class MultitaskModel(BaseMultitaskModel):
         # Segmentation output
         segmentation_output = self.segmentation_head(backbone_features)
         
+        # Ensure consistent shapes for all outputs
+        bbox_output = tf.reshape(bbox_output, [-1, 4])  # [batch_size, 4]
+        class_output = tf.reshape(class_output, [-1, self.num_detection_classes])  # [batch_size, num_classes]
+        segmentation_output = tf.reshape(segmentation_output, [-1, self.target_h, self.target_w, self.num_segmentation_classes])  # [batch_size, H, W, num_classes]
+        
         # Create the model
         self.model = Model(
             inputs=self.input_layer,

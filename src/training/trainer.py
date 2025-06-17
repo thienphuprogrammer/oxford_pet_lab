@@ -96,11 +96,29 @@ class UniversalTrainer:
         if self.model is None:
             raise ValueError("Model is not built! Call build_model() first.")
         
-        # Compile model với auto-config
+        # Get optimizer, loss, and metrics
+        optimizer = self.get_optimizer(optimizer, learning_rate)
+        loss_fn = self.get_loss(loss)
+        metrics_fn = self.get_metrics(metrics)
+        
+        # For multitask, ensure loss and metrics are properly structured
+        if self.task_type == 'multitask':
+            loss_fn = {
+                'bbox_output': 'mse',
+                'class_output': 'sparse_categorical_crossentropy',
+                'segmentation_output': 'sparse_categorical_crossentropy'
+            }
+            metrics_fn = {
+                'bbox_output': ['mae'],
+                'class_output': ['accuracy'],
+                'segmentation_output': ['accuracy']
+            }
+        
+        # Compile model
         self.model.compile(
-            optimizer=self.get_optimizer(optimizer, learning_rate),
-            loss=self.get_loss(loss),
-            metrics=self.get_metrics(metrics)
+            optimizer=optimizer,
+            loss=loss_fn,
+            metrics=metrics_fn
         )
         
         # Get callbacks
