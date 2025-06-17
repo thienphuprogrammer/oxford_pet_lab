@@ -256,6 +256,10 @@ class PretrainedDetectionModel(BaseDetectionModel):
         self.classification_gap = None
         self.classification_avg = None
         self.classification_softmax = None
+        
+        # Initialize the heads
+        self.detection_head = self._build_detection_head()
+        self.classification_head = self._build_classification_head()
 
     def _init_params(self):
         """Initialize parameters"""
