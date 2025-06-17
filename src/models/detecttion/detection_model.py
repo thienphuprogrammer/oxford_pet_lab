@@ -244,8 +244,18 @@ class PretrainedDetectionModel(BaseDetectionModel):
         self.backbone = self._build_backbone()
         # Build BiFPN neck for feature fusion
         self.bifpn = self._build_bifpn()
-        self.detection_head = self._build_detection_head()
-        self.classification_head = self._build_classification_head()
+        
+        # Initialize detection and classification heads
+        self.detection_convs = []
+        self.detection_bbox_conv = None
+        self.detection_gap = None
+        self.detection_avg = None
+        
+        self.classification_convs = []
+        self.classification_head_conv = None
+        self.classification_gap = None
+        self.classification_avg = None
+        self.classification_softmax = None
 
     def _init_params(self):
         """Initialize parameters"""
@@ -376,6 +386,28 @@ class PretrainedDetectionModel(BaseDetectionModel):
             dtype=tf.float32  # Explicitly set dtype to float32
         )
     
+    def build(self, input_shape):
+        # Create detection head layers
+        for i in range(4):
+            self.detection_convs.append(
+                layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32, name=f'det_conv_{i}')
+            )
+        self.detection_bbox_conv = layers.Conv2D(4, 3, padding='same', dtype=tf.float32, name='det_bbox_conv')
+        self.detection_gap = layers.GlobalAveragePooling2D(name='det_gap')
+        self.detection_avg = layers.Average(name='det_avg')
+        
+        # Create classification head layers
+        for i in range(4):
+            self.classification_convs.append(
+                layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32, name=f'cls_conv_{i}')
+            )
+        self.classification_head_conv = layers.Conv2D(self.num_classes, 3, padding='same', dtype=tf.float32, name='cls_head_conv')
+        self.classification_gap = layers.GlobalAveragePooling2D(name='cls_gap')
+        self.classification_avg = layers.Average(name='cls_avg')
+        self.classification_softmax = layers.Activation('softmax', name='class_output')
+        
+        super().build(input_shape)
+
     def _build_detection_head(self):
         """Build detection head"""
         def detection_head(features):
@@ -387,20 +419,20 @@ class PretrainedDetectionModel(BaseDetectionModel):
             for feature in features:
                 x = feature
                 # Detection subnet
-                for _ in range(4):  # 4 conv layers
-                    x = layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32)(x)
+                for conv in self.detection_convs:
+                    x = conv(x)
                 
                 # Bbox regression
-                bbox_out = layers.Conv2D(4, 3, padding='same', dtype=tf.float32)(x)
-                bbox_out = layers.GlobalAveragePooling2D()(bbox_out)
+                bbox_out = self.detection_bbox_conv(x)
+                bbox_out = self.detection_gap(bbox_out)
                 bbox_outputs.append(bbox_out)
             
             # Combine outputs from different scales
             if len(bbox_outputs) > 1:
-                return layers.Average()(bbox_outputs)
+                return self.detection_avg(bbox_outputs)
             return bbox_outputs[0]
         return detection_head
-    
+
     def _build_classification_head(self):
         """Build classification head"""
         def classification_head(features):
@@ -412,22 +444,22 @@ class PretrainedDetectionModel(BaseDetectionModel):
             for feature in features:
                 x = feature
                 # Classification subnet
-                for _ in range(4):  # 4 conv layers
-                    x = layers.Conv2D(256, 3, padding='same', activation='relu', dtype=tf.float32)(x)
+                for conv in self.classification_convs:
+                    x = conv(x)
                 
                 # Classification
-                class_out = layers.Conv2D(self.num_classes, 3, padding='same', dtype=tf.float32)(x)
-                class_out = layers.GlobalAveragePooling2D()(class_out)
+                class_out = self.classification_head_conv(x)
+                class_out = self.classification_gap(class_out)
                 class_outputs.append(class_out)
             
             # Combine outputs from different scales
             if len(class_outputs) > 1:
-                combined = layers.Average()(class_outputs)
+                combined = self.classification_avg(class_outputs)
             else:
                 combined = class_outputs[0]
-            return layers.Activation('softmax', name='class_output')(combined)
+            return self.classification_softmax(combined)
         return classification_head
-    
+
     def call(self, inputs, training=None):
         """Forward pass for detection model"""
         # Ensure input is float32
