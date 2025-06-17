@@ -10,9 +10,7 @@ from typing import Dict, Any
 import tensorflow as tf
 from tqdm import tqdm
 
-from src.training.metrics import (
-    SOTAMetrics,
-)
+from src.metrics.sota_metrics import SOTAMetrics
 
 __all__ = ["Evaluator"]
 
@@ -44,7 +42,7 @@ class Evaluator:
         else:
             raise ValueError(f"Unsupported task type: {task_type}")
     
-    def evaluate(self, dataset: tf.data.Dataset) -> dict[str, Any]:
+    def evaluate(self, dataset: tf.data.Dataset) -> Dict[str, Any]:
         """Evaluate model on dataset and return metrics."""
         # Reset all metrics
         if isinstance(self.metrics, list):
