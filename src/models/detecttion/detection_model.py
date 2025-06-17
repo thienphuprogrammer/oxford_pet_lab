@@ -218,8 +218,8 @@ class SimpleDetectionModel(BaseDetectionModel):
         class_output = tf.reshape(class_output, [-1, self.num_classes])  # [batch_size, num_classes]
         
         return {
-            'bbox_output': bbox_output,
-            'class_output': class_output
+            'bbox': bbox_output,
+            'label': class_output
         }
 
 

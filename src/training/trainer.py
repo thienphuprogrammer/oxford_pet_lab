@@ -104,24 +104,24 @@ class UniversalTrainer:
         # For detection, ensure loss and metrics are properly structured
         if self.task_type == 'detection':
             loss_fn = {
-                'bbox_output': 'mse',
-                'class_output': 'sparse_categorical_crossentropy'
+                'bbox': 'mse',
+                'label': 'sparse_categorical_crossentropy'
             }
             metrics_fn = {
-                'bbox_output': ['mae'],
-                'class_output': ['accuracy']
+                'bbox': ['mae'],
+                'label': ['accuracy']
             }
         # For multitask, ensure loss and metrics are properly structured
         elif self.task_type == 'multitask':
             loss_fn = {
-                'bbox_output': 'mse',
-                'class_output': 'sparse_categorical_crossentropy',
-                'segmentation_output': 'sparse_categorical_crossentropy'
+                'bbox': 'mse',
+                'label': 'sparse_categorical_crossentropy',
+                'segmentation': 'sparse_categorical_crossentropy'
             }
             metrics_fn = {
-                'bbox_output': ['mae'],
-                'class_output': ['accuracy'],
-                'segmentation_output': ['accuracy']
+                'bbox': ['mae'],
+                'label': ['accuracy'],
+                'segmentation': ['accuracy']
             }
         
         # Compile model

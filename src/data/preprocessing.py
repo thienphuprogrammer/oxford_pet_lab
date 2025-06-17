@@ -97,9 +97,10 @@ class DataPreprocessor:
         bbox = tf.reshape(data['head_bbox'], [4])  # [x1, y1, x2, y2]
         label = tf.reshape(data['label'], [1])  # [class_id]
         
+        # Match the model's output format
         target = {
-            'bbox_output': bbox,
-            'class_output': label
+            'bbox': bbox,
+            'label': label
         }
         return image, target
 
