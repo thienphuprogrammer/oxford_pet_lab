@@ -15,6 +15,15 @@ class IoUMetric(tf.keras.metrics.Metric):
         
     def update_state(self, y_true, y_pred, sample_weight=None):
         """y_true, y_pred: [batch_size, 4] in format [x1, y1, x2, y2]"""
+        # ------------------------------------------------------------------
+        # Ensure both tensors share the same dtype (float32) to avoid mixed
+        # precision ops mismatch when the model runs in float16. Casting to
+        # float32 is safe for metric computation and prevents the TypeError
+        # raised by tf.minimum / tf.maximum.
+        # ------------------------------------------------------------------
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+
         # Calculate intersection
         inter_area = tf.maximum(0.0, 
             tf.minimum(y_true[..., 2], y_pred[..., 2]) - tf.maximum(y_true[..., 0], y_pred[..., 0])
@@ -98,6 +107,11 @@ class DetectionMetrics(tf.keras.metrics.Metric):
     
     def _calculate_iou(self, y_true, y_pred):
         """Helper to calculate IoU"""
+        # Cast to float32 to avoid dtype mismatches when mixed precision (float16)
+        # is enabled in the model.
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        
         inter_area = tf.maximum(0.0, 
             tf.minimum(y_true[..., 2], y_pred[..., 2]) - tf.maximum(y_true[..., 0], y_pred[..., 0])
         ) * tf.maximum(0.0, 

@@ -3,7 +3,7 @@ loss_configs:
     loss_type: combined
     losses_config:
       iou: 1.0
-      focal: 1.0
+      focal: 2.0
 
   segmentation:
     loss_type: combined

@@ -210,8 +210,8 @@ class SimpleDetectionModel(BaseDetectionModel):
             class_output = self.classification_head(features, training=training)
         
         return {
-            'bbox_output': bbox_output,
-            'class_output': class_output
+            'bbox': bbox_output,
+            'label': class_output,
         }
 
 
@@ -421,6 +421,9 @@ class PretrainedDetectionModel(BaseDetectionModel):
         return classification_head
     
     def call(self, inputs, training=None):
+        """Forward pass – returns a dict aligned with training targets.
+        Keys: bbox, label, species (duplicate label for compatibility).
+        """
         # Extract multi-scale features
         backbone_features = self.backbone(inputs, training=training)
         
@@ -432,8 +435,8 @@ class PretrainedDetectionModel(BaseDetectionModel):
         class_output = self.classification_head(bifpn_features)
         
         return {
-            'bbox_output': bbox_output,
-            'class_output': class_output
+            'bbox': bbox_output,
+            'label': class_output,
         }
 
 

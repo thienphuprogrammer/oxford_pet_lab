@@ -94,7 +94,6 @@ class DataPreprocessor:
         target = {
             'bbox': data['head_bbox'],
             'label': data['label'],
-            'species': data['species'],
         }
         return image, target
 
@@ -104,7 +103,6 @@ class DataPreprocessor:
         target = {
             'mask': data['segmentation_mask'],
             'label': data['label'],
-            'species': data['species'],
         }
         return image, target
 

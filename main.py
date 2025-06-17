@@ -60,81 +60,44 @@ def _prepare_datasets(
         log_level=cfg.LOG_LEVEL,
     )
 
+    # Initialize preprocessor to enforce fixed image sizes and normalization
+    preprocessor = DataPreprocessor(config=cfg)
+
     train_ds, val_ds, test_ds = loader.create_train_val_test_splits(
         val_split=0.2,
         seed=42
     )
+    # val_ds = val_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+    # test_ds = test_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
 
-    # Tiền xử lý: chuẩn hóa định dạng data
-    preprocessor = DataPreprocessor(config=cfg)
-    train_ds = train_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
-    val_ds = val_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
-    test_ds = test_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+    # augmentor = DataAugmentor(config=cfg, target_height=cfg.IMG_SIZE[0], target_width=cfg.IMG_SIZE[1])
+    # train_ds = train_ds.map(augmentor, num_parallel_calls=tf.data.AUTOTUNE)
 
-    # Augmentation chỉ dùng cho train (và chỉ dùng với sample chuẩn hóa)
-    augmentor = DataAugmentor(config=cfg, target_height=cfg.IMG_SIZE[0], target_width=cfg.IMG_SIZE[1])
-    train_ds = train_ds.map(augmentor, num_parallel_calls=tf.data.AUTOTUNE)
-
-    # Chọn đầu ra theo task
     if task == "detection":
-        def format_detection(sample):
-            image = sample['image']
-            target = {
-                'bbox': sample['head_bbox'],
-                'label': sample['label'],
-                'species': sample['species'],
-            }
-            return image, target
-        output_signature = (
-            tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 3), dtype=tf.float32),
-            {
-                'bbox': tf.TensorSpec(shape=(4,), dtype=tf.float32),
-                'label': tf.TensorSpec(shape=(), dtype=tf.int64),
-                'species': tf.TensorSpec(shape=(), dtype=tf.int64),
-            }
-        )
-        train_ds = train_ds.map(format_detection, num_parallel_calls=tf.data.AUTOTUNE)
-        val_ds = val_ds.map(format_detection, num_parallel_calls=tf.data.AUTOTUNE)
-        test_ds = test_ds.map(format_detection, num_parallel_calls=tf.data.AUTOTUNE)
+        # Resize/normalize images and prepare detection targets
+        train_ds = train_ds.map(preprocessor.for_detection, num_parallel_calls=tf.data.AUTOTUNE)
+        val_ds = val_ds.map(preprocessor.for_detection, num_parallel_calls=tf.data.AUTOTUNE)
+        test_ds = test_ds.map(preprocessor.for_detection, num_parallel_calls=tf.data.AUTOTUNE)
     elif task == "segmentation":
-        def format_segmentation(sample):
-            image = sample['image']
-            target = {
-                'mask': sample['segmentation_mask'],
-                'label': sample['label'],
-                'species': sample['species'],
-            }
-            return image, target
-        output_signature = (
-            tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 3), dtype=tf.float32),
-            {
-                'mask': tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 1), dtype=tf.float32),
-                'label': tf.TensorSpec(shape=(), dtype=tf.int64),
-                'species': tf.TensorSpec(shape=(), dtype=tf.int64),
-            }
-        )
-        train_ds = train_ds.map(format_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
-        val_ds = val_ds.map(format_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
-        test_ds = test_ds.map(format_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
+        # Resize/normalize images and prepare segmentation targets
+        train_ds = train_ds.map(preprocessor.for_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
+        val_ds = val_ds.map(preprocessor.for_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
+        test_ds = test_ds.map(preprocessor.for_segmentation, num_parallel_calls=tf.data.AUTOTUNE)
     elif task == "multitask":
+        # First standardize sample (resize/normalize), then format multitask targets
         def format_multitask(sample):
             image = sample['image']
             target = {
                 'bbox': sample['head_bbox'],
                 'mask': sample['segmentation_mask'],
                 'label': sample['label'],
-                'species': sample['species'],
             }
             return image, target
-        output_signature = (
-            tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 3), dtype=tf.float32),
-            {
-                'bbox': tf.TensorSpec(shape=(4,), dtype=tf.float32),
-                'mask': tf.TensorSpec(shape=(cfg.IMG_SIZE[0], cfg.IMG_SIZE[1], 1), dtype=tf.float32),
-                'label': tf.TensorSpec(shape=(), dtype=tf.int64),
-                'species': tf.TensorSpec(shape=(), dtype=tf.int64),
-            }
-        )
+
+        train_ds = train_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+        val_ds = val_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+        test_ds = test_ds.map(preprocessor.preprocess_sample, num_parallel_calls=tf.data.AUTOTUNE)
+
         train_ds = train_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
         val_ds = val_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
         test_ds = test_ds.map(format_multitask, num_parallel_calls=tf.data.AUTOTUNE)
@@ -184,13 +147,16 @@ def main(argv: list[str] | None = None) -> None:
     trainer = Trainer(
         model=model,
         task_type=args.task,
-        backbone_name=cfg.BACKBONE,
         config=cfg,
-        models_config=models_cfg,
+        model_cfg=models_cfg,
     )
 
     print(f"\n[INFO] Starting training – task={args.task} backbone={args.backbone} epochs={args.epochs}")
-    trainer.fit(train_ds, val_dataset=val_ds, epochs=args.epochs)
+    trainer.fit(
+        train_ds,
+        val_ds,
+        epochs=args.epochs,
+    )
 
     evaluator = Evaluator(
         model=trainer.model,

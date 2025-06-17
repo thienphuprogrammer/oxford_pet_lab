@@ -123,8 +123,9 @@ class BiFPN(layers.Layer):
                 
                 for i in range(len(resampled) - 2, -1, -1):
                     # Upsample and add
-                    target_shape = tf.shape(resampled[i])
-                    upsampled = tf.image.resize(prev, [target_shape[1], target_shape[2]])
+                    target_shape = tf.shape(resampled[i])[1:3]
+                    upsampled = tf.image.resize(prev, target_shape)
+                    upsampled = tf.cast(upsampled, resampled[i].dtype)
                     merged = resampled[i] + upsampled
                     top_down.insert(0, merged)
                     prev = merged
@@ -136,9 +137,10 @@ class BiFPN(layers.Layer):
                 
                 for i in range(1, len(top_down)):
                     # Downsample and add
-                    target_shape = tf.shape(top_down[i])
+                    target_shape = tf.shape(top_down[i])[1:3]
                     downsampled = layers.MaxPooling2D(pool_size=2)(prev)
-                    downsampled = tf.image.resize(downsampled, [target_shape[1], target_shape[2]])
+                    downsampled = tf.image.resize(downsampled, target_shape)
+                    downsampled = tf.cast(downsampled, top_down[i].dtype)
                     merged = top_down[i] + downsampled
                     bottom_up.append(self.bifpn_convs[i](merged))
                     prev = merged
