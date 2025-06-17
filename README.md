@@ -53,7 +53,7 @@ Object detection and semantic segmentation are fundamental computer vision probl
 *Class distribution in Oxford-IIIT Pet Dataset.*
 
 |         Class Distribution          |              Image Dimensions              |        Split Distribution         |
-|:-----------------------------------:|:-----------------------------------:|
+|:-----------------------------------:|:-----------------------------------:|:----------------------------------:|
 | ![](results/plots/dataset/class_distribution.png) | ![](results/plots/dataset/image_dimensions.png) | ![](results/plots/dataset/split_distribution.png) |
 
 ---
