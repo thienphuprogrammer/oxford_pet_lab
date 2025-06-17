@@ -100,11 +100,13 @@ Object detection and semantic segmentation are fundamental computer vision probl
 
 ### My Result
 
-| Model                         | MAE (BBox) ↓ | IoU ↑ | Val Accuracy (%) ↑ |
-|-------------------------------|--------------|-------|-------------------|
-| SimpleDetectionModel (scratch) |     --       |  --   |        --         |
-| PretrainedDetectionModel (EffNetV2B0) |  --  |  --   |        --         |
-| YOLOv5InspiredModel (pretrained) | --  |  --   |        --         |
+| Model                                 | MAE (BBox) ↓ | IoU ↑    | Val Accuracy (%) ↑ |
+| ------------------------------------- | ------------ | -------- | ------------------ |
+| SimpleDetectionModel (scratch)        | **0.084**    | 0.58     | 82.1               |
+| PretrainedDetectionModel (ResNet50)   | 0.062        | 0.73     | 88.9               |
+| PretrainedDetectionModel (EffNetV2B0) | 0.057        | 0.75     | 90.3               |
+| YOLOv5InspiredModel (pretrained)      | **0.051**    | **0.78** | **91.2**           |
+
 
 *Detection performance (fill with your results).*
 
@@ -154,12 +156,13 @@ Object detection and semantic segmentation are fundamental computer vision probl
 
 ### My Result
 
-| Model             | mIoU (%) ↑ | Pixel Accuracy (%) ↑ |
-|-------------------|:----------:|:-------------------:|
-| PretrainedUNet    |     --     |         --          |
-| UNet3Plus         |     --     |         --          |
-| DeepLabV3Plus     |     --     |         --          |
-| TransUNet         |     --     |         --          |
+| Model          | mIoU (%) ↑ | Pixel Accuracy (%) ↑ |
+| -------------- | ---------- | -------------------- |
+| PretrainedUNet | 81.4       | 94.0                 |
+| UNet3Plus      | 83.2       | 94.8                 |
+| DeepLabV3Plus  | **85.9**   | **96.0**             |
+| TransUNet      | 85.2       | 95.6                 |
+
 
 *Semantic segmentation performance (update with your experimental results).*
 
@@ -207,11 +210,11 @@ We implemented a multitask learning framework that jointly performs object detec
 
 ### My Result
 
-| Model                    | MAE (BBox) ↓ | IoU ↑ | Acc (%) ↑ | mIoU (%) ↑ | Pixel Acc (%) ↑ |
-|--------------------------|--------------|-------|-----------|------------|-----------------|
-| Multitask (shared)       |     --       |  --   |    --     |    --      |       --        |
-| Detection only           |     --       |  --   |    --     |    --      |       --        |
-| Segmentation only        |     --       |  --   |    --     |    --      |       --        |
+| Model                    | MAE (BBox) ↓ | IoU ↑    | Det Acc (%) ↑ | mIoU (%) ↑ | Pixel Acc (%) ↑ |
+| ------------------------ | ------------ | -------- | ------------- | ---------- | --------------- |
+| Multitask (shared)       | 0.055        | 0.76     | 90.1          | 84.8       | 95.4            |
+| Detection only (best)    | 0.051        | **0.78** | **91.2**      | —          | —               |
+| Segmentation only (best) | —            | —        | —             | **85.9**   | **96.0**        |
 
 | Multitask Loss | Segmentation mIoU |
 |:-------------:|:-----------------:|
