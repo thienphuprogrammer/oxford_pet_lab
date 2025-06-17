@@ -1,79 +1,48 @@
 import tensorflow as tf
 from tensorflow.keras import backend as K
 from tensorflow.keras.losses import *
-import tensorflow_addons as tfa
-
 class SOTALoss:
     """SOTA Loss functions cho Object Detection, Segmentation và Multitask"""
     
     @staticmethod
-    def focal_loss(alpha=0.25, gamma=2.0):
-        """Focal Loss - Tốt cho class imbalance"""
-        def loss_fn(y_true, y_pred):
-            return tfa.losses.focal_loss.focal_loss(
-                y_true, y_pred, alpha=alpha, gamma=gamma
-            )
-        return loss_fn
+    def focal_loss(alpha=0.25, gamma=2.0, from_logits=False):
+        return tf.keras.losses.BinaryFocalCrossentropy(
+            alpha=alpha, gamma=gamma, from_logits=from_logits
+        )
     
     @staticmethod  
     def dice_loss(smooth=1e-6):
-        """Dice Loss - Tốt cho segmentation"""
         def loss_fn(y_true, y_pred):
-            y_true_f = tf.cast(tf.reshape(y_true, [-1]), tf.float32)
-            y_pred_f = tf.cast(tf.reshape(y_pred, [-1]), tf.float32)
-            
-            intersection = tf.reduce_sum(y_true_f * y_pred_f)
-            union = tf.reduce_sum(y_true_f) + tf.reduce_sum(y_pred_f)
-            
-            dice = (2. * intersection + smooth) / (union + smooth)
-            return 1 - dice
+            dice = tf.keras.losses.Dice(smoothness=smooth)(y_true, y_pred)
+            return 1.0 - dice
         return loss_fn
     
     @staticmethod
     def iou_loss():
         """IoU Loss - Tốt cho object detection"""
-        def loss_fn(y_true, y_pred):
-            return tfa.losses.giou_loss(y_true, y_pred)
-        return loss_fn
+        return tf.keras.losses.Dice(mode='iou')
     
     @staticmethod
     def combined_seg_loss(dice_weight=0.5, focal_weight=0.5):
-        """Combined loss cho segmentation"""
-        dice_fn = SOTALoss.dice_loss()
-        focal_fn = SOTALoss.focal_loss()
-        
+        d_fn = dice_loss()
+        f_fn = focal_loss()
         def loss_fn(y_true, y_pred):
-            return dice_weight * dice_fn(y_true, y_pred) + \
-                   focal_weight * focal_fn(y_true, y_pred)
+            return dice_weight * d_fn(y_true, y_pred) + focal_weight * f_fn(y_true, y_pred)
         return loss_fn
 
 class ObjectDetectionLoss:
     """SOTA losses cho Object Detection"""
     
     @staticmethod
-    def yolo_loss(num_classes, anchors, ignore_thresh=0.5):
-        """YOLO-style loss sử dụng built-in functions"""
+    def yolo_loss(num_classes):
+        huber = tf.keras.losses.Huber()
+        bce = tf.keras.losses.BinaryCrossentropy()
+        sce = tf.keras.losses.SparseCategoricalCrossentropy()
         def loss_fn(y_true, y_pred):
-            # Box regression loss
-            box_loss = tf.reduce_mean(
-                tf.keras.losses.huber(y_true[..., :4], y_pred[..., :4])
-            )
-            
-            # Objectness loss  
-            obj_loss = tf.reduce_mean(
-                tf.keras.losses.binary_crossentropy(
-                    y_true[..., 4:5], y_pred[..., 4:5]
-                )
-            )
-            
-            # Classification loss
-            class_loss = tf.reduce_mean(
-                tf.keras.losses.sparse_categorical_crossentropy(
-                    y_true[..., 5:], y_pred[..., 5:]
-                )
-            )
-            
-            return box_loss + obj_loss + class_loss
+            box_loss  = tf.reduce_mean(huber(y_true[..., :4], y_pred[..., :4]))
+            obj_loss  = tf.reduce_mean(bce   (y_true[..., 4:5], y_pred[..., 4:5]))
+            cls_loss  = tf.reduce_mean(sce   (y_true[..., 5:],  y_pred[..., 5:]))
+            return box_loss + obj_loss + cls_loss
         return loss_fn
     
     @staticmethod
@@ -199,8 +168,8 @@ class MultitaskLoss:
 # ==========================================================
 
 # 1. Object Detection
-def get_detection_loss():
-    return ObjectDetectionLoss.yolo_loss(num_classes=80, anchors=None)
+def get_detection_loss(num_classes):
+    return ObjectDetectionLoss.fcos_loss(num_classes=num_classes, anchors=None)
 
 # 2. Segmentation  
 def get_segmentation_loss():
@@ -217,13 +186,3 @@ def get_multitask_loss():
     }
     
     return multitask.get_multitask_loss(tasks)
-
-# 4. Quick setup functions
-def quick_focal():
-    return tfa.losses.focal_loss.focal_loss
-
-def quick_dice():
-    return SOTALoss.dice_loss()
-
-def quick_giou():
-    return tfa.losses.giou_loss

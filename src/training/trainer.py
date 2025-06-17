@@ -1,9 +1,6 @@
 from src.models.base_model import ModelBuilder
 import tensorflow as tf
-import tensorflow_addons as tfa
 from tensorflow import keras
-from tensorflow.keras import callbacks
-import numpy as np
 from typing import Tuple
 
 from src.training.callbacks import *
@@ -40,13 +37,13 @@ class UniversalTrainer:
             }[self.task_type]
         
         optimizers_map = {
-            'adamw': tfa.optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4),
-            'lamb': tfa.optimizers.LAMB(learning_rate=learning_rate),
-            'lookahead': tfa.optimizers.Lookahead(
-                tfa.optimizers.AdamW(learning_rate=learning_rate)
+            'adamw': tf.keras.optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4),
+            'lamb': tf.keras.optimizers.LAMB(learning_rate=learning_rate),
+            'lookahead': tf.keras.optimizers.Lookahead(
+                tf.keras.optimizers.AdamW(learning_rate=learning_rate)
             ),
-            'sgd': keras.optimizers.SGD(learning_rate=learning_rate, momentum=0.9),
-            'adam': keras.optimizers.Adam(learning_rate=learning_rate)
+            'sgd': tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=0.9),
+            'adam': tf.keras.optimizers.Adam(learning_rate=learning_rate)
         }
         
         return optimizers_map.get(optimizer_type, keras.optimizers.Adam(learning_rate))
@@ -61,26 +58,16 @@ class UniversalTrainer:
                 'multitask': get_multitask_loss()
             }
             return loss_configs[self.task_type]
-        
-        loss_map = {
-            'focal': tfa.losses.focal_loss.sigmoid_focal_crossentropy,
-            'dice': tfa.losses.sigmoid_focal_crossentropy,
-            'iou': self._iou_loss,
-            'huber': keras.losses.Huber(),
-            'mse': 'mse',
-            'categorical': 'categorical_crossentropy',
-            'binary': 'binary_crossentropy'
-        }
-        
-        return loss_map.get(loss_type, 'mse')
-    
+        else:
+            return loss_configs[loss_type]
+            
     # === METRICS ===
     def get_metrics(self, metrics_type: str = 'auto'):
         """Get metrics tối ưu cho từng task"""
         metrics_configs = {
-            'detection': get_detection_setup(),
-            'segmentation': get_segmentation_setup(),
-            'multitask': get_multitask_setup(),
+            'detection': SOTAMetrics.get_detection_metrics(),
+            'segmentation': SOTAMetrics.get_segmentation_metrics(),
+            'multitask': SOTAMetrics.get_multitask_metrics(),
         }
         return metrics_configs[self.task_type]
         

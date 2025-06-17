@@ -1,6 +1,4 @@
 import tensorflow as tf
-from tensorflow.keras.optimizers import *
-import tensorflow_addons as tfa
 
 class SOTAOptimizers:
     """SOTA Optimizers sử dụng built-in optimizers"""
@@ -12,17 +10,17 @@ class SOTAOptimizers:
         
         configs = {
             'small': {
-                'optimizer': Adam,
+                'optimizer': tf.keras.optimizers.Adam,
                 'lr': 1e-3,
                 'params': {'beta_1': 0.9, 'beta_2': 0.999, 'epsilon': 1e-7}
             },
             'medium': {
-                'optimizer': tfa.optimizers.AdamW,
+                'optimizer': tf.keras.optimizers.AdamW,
                 'lr': 1e-3, 
                 'params': {'weight_decay': 1e-4, 'beta_1': 0.9, 'beta_2': 0.999}
             },
             'large': {
-                'optimizer': tfa.optimizers.LAMB,
+                'optimizer': tf.keras.optimizers.LAMB,
                 'lr': 1e-3,
                 'params': {'weight_decay_rate': 0.01, 'beta_1': 0.9, 'beta_2': 0.999}
             }
@@ -40,34 +38,34 @@ class SOTAOptimizers:
         """Best optimizers cho object detection"""
         
         frameworks = {
-            'yolo': lambda lr: SGD(
+            'yolo': lambda lr: tf.keras.optimizers.SGD(
                 learning_rate=lr,
                 momentum=0.937,
                 nesterov=True
             ),
             
-            'rcnn': lambda lr: tfa.optimizers.AdamW(
+            'rcnn': lambda lr: tf.keras.optimizers.AdamW(
                 learning_rate=lr,
                 weight_decay=1e-4,
                 beta_1=0.9,
                 beta_2=0.999
             ),
             
-            'ssd': lambda lr: tfa.optimizers.RectifiedAdam(
+            'ssd': lambda lr: tf.keras.optimizers.RectifiedAdam(
                 learning_rate=lr,
                 beta_1=0.9,
                 beta_2=0.999,
                 weight_decay=1e-4
             ),
             
-            'efficientdet': lambda lr: tfa.optimizers.AdamW(
+            'efficientdet': lambda lr: tf.keras.optimizers.AdamW(
                 learning_rate=lr,
                 weight_decay=4e-5,
                 beta_1=0.9,
                 beta_2=0.999
             ),
             
-            'detr': lambda lr: tfa.optimizers.AdamW(
+            'detr': lambda lr: tf.keras.optimizers.AdamW(
                 learning_rate=lr,
                 weight_decay=1e-4,
                 beta_1=0.9,
@@ -83,33 +81,33 @@ class SOTAOptimizers:
         """Best optimizers cho classification"""
         
         architectures = {
-            'resnet': lambda lr: SGD(
+            'resnet': lambda lr: tf.keras.optimizers.SGD(
                 learning_rate=lr,
                 momentum=0.9,
                 nesterov=True
             ),
             
-            'efficientnet': lambda lr: tfa.optimizers.AdamW(
+            'efficientnet': lambda lr: tf.keras.optimizers.AdamW(
                 learning_rate=lr,
                 weight_decay=1e-5,
                 beta_1=0.9,
                 beta_2=0.999
             ),
             
-            'vit': lambda lr: tfa.optimizers.AdamW(
+            'vit': lambda lr: tf.keras.optimizers.AdamW(
                 learning_rate=lr,
                 weight_decay=0.3,
                 beta_1=0.9,
                 beta_2=0.999
             ),
             
-            'mobilenet': lambda lr: tfa.optimizers.RectifiedAdam(
+            'mobilenet': lambda lr: tf.keras.optimizers.RectifiedAdam(
                 learning_rate=lr,
                 beta_1=0.9,
                 beta_2=0.999
             ),
             
-            'convnext': lambda lr: tfa.optimizers.AdamW(
+            'convnext': lambda lr: tf.keras.optimizers.AdamW(
                 learning_rate=lr,
                 weight_decay=0.05,
                 beta_1=0.9,
@@ -126,7 +124,7 @@ class SOTAOptimizers:
         
         strategies = {
             # Adaptive learning rates
-            'adaptive': tfa.optimizers.AdamW(
+            'adaptive': tf.keras.optimizers.AdamW(
                 learning_rate=learning_rate,
                 weight_decay=1e-4,
                 beta_1=0.9,
@@ -134,14 +132,14 @@ class SOTAOptimizers:
             ),
             
             # Gradient centralization
-            'centralized': tfa.optimizers.CentralizedGradientDescent(
+            'centralized': tf.keras.optimizers.CentralizedGradientDescent(
                 learning_rate=learning_rate,
                 momentum=0.9,
                 use_nesterov=True
             ),
             
             # Large batch training
-            'lamb': tfa.optimizers.LAMB(
+            'lamb': tf.keras.optimizers.LAMB(
                 learning_rate=learning_rate,
                 weight_decay_rate=0.01,
                 beta_1=0.9,
@@ -149,8 +147,8 @@ class SOTAOptimizers:
             ),
             
             # Lookahead wrapper
-            'lookahead': tfa.optimizers.Lookahead(
-                tfa.optimizers.AdamW(
+            'lookahead': tf.keras.optimizers.Lookahead(
+                tf.keras.optimizers.AdamW(
                     learning_rate=learning_rate,
                     weight_decay=1e-4
                 ),
@@ -168,41 +166,41 @@ class SOTAOptimizers:
         
         optimizers = {
             # Standard with improvements
-            'adamw': lambda: tfa.optimizers.AdamW(
+            'adamw': lambda: tf.keras.optimizers.AdamW(
                 learning_rate=learning_rate,
                 weight_decay=kwargs.get('weight_decay', 1e-4),
                 **{k: v for k, v in kwargs.items() if k != 'weight_decay'}
             ),
             
             # Rectified Adam
-            'radam': lambda: tfa.optimizers.RectifiedAdam(
+            'radam': lambda: tf.keras.optimizers.RectifiedAdam(
                 learning_rate=learning_rate,
                 **kwargs
             ),
             
             # LAMB for large batches
-            'lamb': lambda: tfa.optimizers.LAMB(
+            'lamb': lambda: tf.keras.optimizers.LAMB(
                 learning_rate=learning_rate,
                 weight_decay_rate=kwargs.get('weight_decay_rate', 0.01),
                 **{k: v for k, v in kwargs.items() if k != 'weight_decay_rate'}
             ),
             
             # Lookahead wrapper
-            'lookahead_adam': lambda: tfa.optimizers.Lookahead(
-                Adam(learning_rate=learning_rate),
+            'lookahead_adam': lambda: tf.keras.optimizers.Lookahead(
+                tf.keras.optimizers.Adam(learning_rate=learning_rate),
                 sync_period=kwargs.get('sync_period', 5),
                 slow_step_size=kwargs.get('slow_step_size', 0.5)
             ),
             
             # Stochastic Weight Averaging
-            'swa': lambda: tfa.optimizers.SWA(
-                Adam(learning_rate=learning_rate),
+            'swa': lambda: tf.keras.optimizers.SWA(
+                tf.keras.optimizers.Adam(learning_rate=learning_rate),
                 start_averaging=kwargs.get('start_averaging', 0),
                 average_period=kwargs.get('average_period', 10)
             ),
             
             # Gradient Centralization
-            'gc_sgd': lambda: tfa.optimizers.CentralizedGradientDescent(
+            'gc_sgd': lambda: tf.keras.optimizers.CentralizedGradientDescent(
                 learning_rate=learning_rate,
                 momentum=kwargs.get('momentum', 0.9),
                 use_nesterov=kwargs.get('use_nesterov', True)
