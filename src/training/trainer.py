@@ -145,7 +145,8 @@ class UniversalTrainer:
         callback_type: str = 'sota',
         monitor: str = 'val_loss',
         patience: int = 15,
-        save_dir: Optional[str] = None,
+        model_name: str = 'model',
+        log_dir: str = 'logs',
         **kwargs
     ) -> List[tf.keras.callbacks.Callback]:
         """
@@ -166,13 +167,15 @@ class UniversalTrainer:
                 base_callbacks = get_sota_callbacks(
                     monitor=monitor,
                     patience=patience,
-                    save_dir=save_dir
+                    model_name=model_name,
+                    log_dir=log_dir
                 )
             elif callback_type == 'advanced':
                 base_callbacks = get_advanced_callbacks(
                     patience=patience,
                     monitor=monitor,
-                    save_dir=save_dir
+                    model_name=model_name,
+                    log_dir=log_dir
                 )
             else:
                 raise ValueError(f"Unknown callback type: {callback_type}")
@@ -191,7 +194,7 @@ class UniversalTrainer:
         metrics: str = 'auto',
         callbacks_type: str = 'sota',
         learning_rate: float = 1e-3,
-        save_dir: Optional[str] = None,
+        log_dir: str = 'logs',
         **kwargs
     ) -> tf.keras.callbacks.History:
         """
@@ -254,8 +257,9 @@ class UniversalTrainer:
             
             # Get callbacks
             callback_list = self.get_callbacks(
-                callback_type,
-                save_dir=save_dir,
+                callback_type=callbacks_type,
+                model_name=self.model_name,
+                log_dir=log_dir,
                 **kwargs
             )
             

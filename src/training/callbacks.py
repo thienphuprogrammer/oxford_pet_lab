@@ -3,13 +3,15 @@ from tensorflow.keras.callbacks import *
 import numpy as np
 from datetime import datetime
 
-def get_sota_callbacks(monitor='val_loss', 
-                      patience=15,
-                      model_name='best_model',
-                      log_dir='logs',
-                      reduce_lr_patience=7,
-                      min_lr=1e-7,
-                      factor=0.5):
+def get_sota_callbacks(
+    monitor: str = 'val_loss', 
+    patience: int = 15,
+    model_name: str = 'best_model',
+    log_dir: str = 'logs',
+    reduce_lr_patience: int = 7,
+    min_lr: float = 1e-7,
+    factor: float = 0.5
+):
     """
     Tạo bộ callbacks SOTA sử dụng built-in callbacks của Keras
     """
@@ -74,11 +76,13 @@ def get_sota_callbacks(monitor='val_loss',
     
     return callbacks
 
-def get_advanced_callbacks(monitor='val_loss',
-                         patience=20,
-                         model_name='advanced_model',
-                         cosine_restart=True,
-                         warmup_epochs=5):
+def get_advanced_callbacks(
+    monitor: str = 'val_loss',
+    patience: int = 20,
+    model_name: str = 'advanced_model',
+    cosine_restart: bool = True,
+    warmup_epochs: int = 5
+):
     """
     Callbacks nâng cao với Cosine Annealing và Warmup
     """
@@ -109,7 +113,14 @@ def get_advanced_callbacks(monitor='val_loss',
     
     return callbacks
 
-def cosine_annealing_with_warmup(epoch, current_lr, warmup_epochs, total_epochs, min_lr=1e-6, max_lr=1e-3):
+def cosine_annealing_with_warmup(
+    epoch: int,
+    current_lr: float,
+    warmup_epochs: int,
+    total_epochs: int,
+    min_lr: float = 1e-6,
+    max_lr: float = 1e-3
+):
     """Cosine annealing với warmup phase"""
     if epoch < warmup_epochs:
         # Warmup phase
@@ -124,31 +135,45 @@ def cosine_annealing_with_warmup(epoch, current_lr, warmup_epochs, total_epochs,
 # =====================================================
 
 # 1. Setup cơ bản - đơn giản nhất
-def basic_setup():
+def basic_setup(
+    monitor: str = 'val_accuracy',
+    patience: int = 15,
+    model_name: str = 'my_model'
+):
     callbacks = get_sota_callbacks(
-        monitor='val_accuracy',  # hoặc 'val_loss'
-        patience=15,
-        model_name='my_model'
+        monitor=monitor,  # hoặc 'val_loss'
+        patience=patience,
+        model_name=model_name
     )
     return callbacks
 
 # 2. Setup nâng cao
-def advanced_setup():
+def advanced_setup(
+    monitor: str = 'val_accuracy',
+    patience: int = 20,
+    model_name: str = 'advanced_model',
+    cosine_restart: bool = True,
+    warmup_epochs: int = 10
+):
     callbacks = get_advanced_callbacks(
-        monitor='val_accuracy',
-        patience=20,
-        model_name='advanced_model',
-        cosine_restart=True,
-        warmup_epochs=10
+        monitor=monitor,
+        patience=patience,
+        model_name=model_name,
+        cosine_restart=cosine_restart,
+        warmup_epochs=warmup_epochs
     )
     return callbacks
 
 # 3. Custom mix - tự chọn callbacks
-def custom_setup():
+def custom_setup(
+    monitor: str = 'val_loss',
+    patience: int = 10,
+    model_name: str = 'my_model'
+):
     return [
-        EarlyStopping('val_loss', patience=10, restore_best_weights=True),
-        ModelCheckpoint('best.h5', 'val_loss', save_best_only=True),
-        ReduceLROnPlateau('val_loss', factor=0.2, patience=5, min_lr=1e-7),
-        TensorBoard('logs', histogram_freq=1),
+        EarlyStopping(monitor=monitor, patience=patience, restore_best_weights=True),
+        ModelCheckpoint(f'{model_name}.h5', monitor=monitor, save_best_only=True),
+        ReduceLROnPlateau(monitor=monitor, factor=0.2, patience=5, min_lr=1e-7),
+        TensorBoard(f'logs/{model_name}', histogram_freq=1),
     ]
 
